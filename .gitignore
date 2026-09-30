@@ -1,0 +1,25 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+*.local
+tmp/
+tmp-data/
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+*.log
+.DS_Store
+.vite/
+
+# private locked spec (never commit)
+.claude/cameld-spec.md
+.claude/worktrees/
+
+# Playwright output
+e2e/test-results/
+e2e/playwright-report/
+.gstack/

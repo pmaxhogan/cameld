@@ -1,0 +1,75 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    # The workspaces root: one manifest scan covers shared, server, web, and e2e.
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/New_York
+    open-pull-requests-limit: 5
+    groups:
+      # One PR a week for everything non-breaking. Majors stay separate so they
+      # get reviewed rather than auto-merged.
+      minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+      security:
+        applies-to: security-updates
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # PrimeVue 5 moved to the commercial PrimeUI license model, which needs a
+      # per-deployment key a public repo cannot ship. Stay on 4.x MIT.
+      - dependency-name: primevue
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "@primeuix/themes"
+        update-types:
+          - version-update:semver-major
+      # TypeScript 7 is the Go-based rewrite with an incompatible JS API that
+      # breaks vue-tsc and typescript-eslint. Stay on the 6.x line until the
+      # toolchain supports it.
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
+      # Vitest majors move with the whole toolchain; upgrade deliberately.
+      - dependency-name: vitest
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "@vitest/coverage-v8"
+        update-types:
+          - version-update:semver-major
+    commit-message:
+      prefix: "deps"
+      include: scope
+
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/New_York
+    commit-message:
+      prefix: "deps(docker)"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/New_York
+    groups:
+      actions:
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: "deps(actions)"

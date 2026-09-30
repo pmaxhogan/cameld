@@ -1,0 +1,112 @@
+name: Build image
+
+# Gated on CI: this only runs after the CI workflow finished on main and
+# concluded success. (Deliberate delta from amber, whose image build is
+# ungated.) workflow_dispatch exists for manual rebuilds.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: build-image-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    name: Build, smoke test, and push
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push')
+    steps:
+      # Build exactly the commit CI validated, not whatever main is by now.
+      - name: Resolve the commit
+        id: rev
+        env:
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "short=${SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.rev.outputs.sha }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build to the local daemon first so the smoke test runs the exact image
+      # that would be pushed.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: cameld:smoke
+          build-args: |
+            CAMELD_VERSION=${{ steps.rev.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the built image
+        run: |
+          set -euo pipefail
+          mkdir -p smoke-data
+          chmod 777 smoke-data
+          docker run -d --name cameld-smoke \
+            --user 568:568 \
+            -e DATA_DIR=/data \
+            -v "$PWD/smoke-data:/data" \
+            cameld:smoke
+          for attempt in $(seq 1 30); do
+            if docker exec cameld-smoke curl -fsS http://127.0.0.1:8080/healthz; then
+              echo
+              echo "healthz ok after ${attempt} attempt(s)"
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "healthz never came up"
+              docker logs cameld-smoke
+              exit 1
+            fi
+            sleep 2
+          done
+          docker exec cameld-smoke sh -c 'ls /ms-playwright | grep -i chromium'
+          docker exec cameld-smoke curl -fsS http://127.0.0.1:8080/ | grep -qi '<div id="app">'
+          docker logs cameld-smoke
+
+      - name: Tear down the smoke container
+        if: always()
+        run: docker rm -f cameld-smoke || true
+
+      - name: Push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ steps.rev.outputs.short }}
+          build-args: |
+            CAMELD_VERSION=${{ steps.rev.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

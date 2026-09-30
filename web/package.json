@@ -1,0 +1,27 @@
+{
+  "name": "@cameld/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "//primevue": "Pinned to the 4.x line, and @primeuix/themes to the matching 2.x line, because PrimeVue 5 moved to the commercial PrimeUI license model: every deployment needs a registered key and renders an 'Invalid PrimeUI License' banner without one. cameld is a public repo and image, so there is no key to ship. 4.x is MIT. Dependabot skips both majors in .github/dependabot.yml. Revisit only if PrimeVue relicenses.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@cameld/shared": "^0.1.0",
+    "@primeuix/themes": "^2.0.3",
+    "maplibre-gl": "^6.11.2",
+    "primevue": "^4.5.5",
+    "vue": "^3.5.43"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.9",
+    "@vue/test-utils": "^2.5.1",
+    "happy-dom": "^20.14.5",
+    "vite": "^8.3.1",
+    "vue-tsc": "^3.3.11"
+  }
+}

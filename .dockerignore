@@ -1,0 +1,18 @@
+**/node_modules
+**/dist
+**/coverage
+.git
+.github
+.claude
+docs
+# e2e/package.json is needed for the workspaces install; only its tests go.
+e2e/tests
+e2e/playwright.config.ts
+tmp
+tmp-data
+playwright-report
+test-results
+*.log
+.env
+.env.*
+!.env.example

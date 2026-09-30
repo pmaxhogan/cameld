@@ -1,0 +1,29 @@
+# Example production deployment, modelled on a TrueNAS custom app. Copy it and
+# change the two paths. The data directory must be writable by the uid below.
+#
+# cameld has no public port. Traffic arrives through a Cloudflare Tunnel whose
+# origin is this container's service name on the shared internal network, and
+# the app itself verifies the Cloudflare Access JWT (see docs/ARCHITECTURE.md).
+
+services:
+  cameld:
+    image: ghcr.io/pmaxhogan/cameld:latest
+    container_name: cameld
+    pull_policy: always
+    restart: unless-stopped
+    # Nothing in the image needs root; use the uid:gid that owns the data dir.
+    user: "568:568"
+    env_file:
+      - /srv/cameld/.env
+    volumes:
+      # cameld creates state/ (and later backups/) inside this on first boot.
+      - /srv/cameld:/data
+    # No ports: published. It listens on 8080 inside the container only.
+    labels:
+      # A host-wide watchtower only touches containers that opt in.
+      com.centurylinklabs.watchtower.enable: "true"
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"

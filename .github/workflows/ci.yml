@@ -1,0 +1,170 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Superseded runs on the same ref are cancelled.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION_PRIMARY: "26"
+  NODE_VERSION_COMPAT: "24"
+
+jobs:
+  lint:
+    name: Lint and typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION_PRIMARY }}
+          cache: npm
+
+      - run: npm ci
+
+      # shared must be built before the other workspaces can resolve its types.
+      - name: Build shared
+        run: npm run build -w shared
+
+      - name: ESLint
+        run: npx eslint .
+
+      - name: Prettier
+        run: npm run format:check
+
+      - name: ASCII dash check
+        run: npm run lint:ascii
+
+      - name: Typecheck
+        run: npm run typecheck
+
+  test:
+    name: Test (Node 26, coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION_PRIMARY }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build shared
+        run: npm run build -w shared
+
+      - name: Test with coverage
+        run: npm run test:coverage
+
+      - name: Coverage ratchet
+        run: npm run coverage:ratchet
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 7
+
+  test-node24:
+    name: Test (Node 24 compat)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION_COMPAT }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build shared
+        run: npm run build -w shared
+
+      - name: Test
+        run: npm test
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION_PRIMARY }}
+          cache: npm
+
+      # Fails on high or critical advisories in any workspace, dev or prod.
+      - name: npm audit
+        run: npm audit --audit-level=high
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION_PRIMARY }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build all workspaces
+        run: npm run build
+
+      - name: Check the server entrypoint was emitted
+        run: test -f server/dist/index.js
+
+      - name: Check the web bundle was emitted
+        run: test -f web/dist/index.html
+
+  e2e:
+    name: End to end smoke
+    runs-on: ubuntu-latest
+    # Only worth running once the pieces it drives are known to compile.
+    needs: build
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION_PRIMARY }}
+          cache: npm
+
+      - run: npm ci
+
+      # The suite drives the built server and the built frontend, not a dev
+      # server, so this has to be a real production build.
+      - name: Build all workspaces
+        run: npm run build
+
+      - name: Install the Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the smoke suite
+        run: npm run test:e2e -w e2e
+
+      - name: Upload the Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+          retention-days: 7

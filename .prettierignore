@@ -1,0 +1,11 @@
+# Prettier reflows tables whose cells contain pipes inside code spans.
+docs/
+node_modules/
+dist/
+coverage/
+package-lock.json
+coverage-baseline.json
+playwright-report/
+test-results/
+tmp-data/
+.claude/

@@ -1,0 +1,53 @@
+{
+  "name": "cameld",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "cameld - merges duplicate Strava recordings of the same outing without losing data.",
+  "license": "MIT",
+  "author": "Max Hogan",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "shared",
+    "server",
+    "web",
+    "e2e"
+  ],
+  "//typescript": "Pinned to 6.x, not the latest 7.x: typescript-eslint 8.71 declares peer typescript '>=4.8.4 <6.1.0', so TS 7 (the Go rewrite with an incompatible JS API) would break linting and vue-tsc. 6.0.3 is the newest release typescript-eslint accepts. Dependabot ignores the typescript major. Revisit when typescript-eslint ships TS 7 support.",
+  "//vitest": "Pinned to the 4.x line, matching amber. Dependabot ignores the vitest and @vitest/coverage-v8 majors until the whole toolchain is moved deliberately.",
+  "scripts": {
+    "dev": "npm run build -w shared && concurrently -n server,web -c yellow,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm run dev -w server",
+    "dev:web": "npm run dev -w web",
+    "build": "npm run build -w shared && npm run build -w server && npm run build -w web",
+    "lint": "eslint . && npm run lint:ascii",
+    "lint:fix": "eslint . --fix",
+    "lint:ascii": "node scripts/check-ascii.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "npm run build -w shared && npm run typecheck -w shared && npm run typecheck -w server && npm run typecheck -w web && npm run typecheck -w e2e",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "npm run test:e2e -w e2e",
+    "coverage:ratchet": "node scripts/coverage-ratchet.mjs",
+    "coverage:ratchet:write": "node scripts/coverage-ratchet.mjs --write"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.3",
+    "@vitest/coverage-v8": "^4.1.11",
+    "concurrently": "^10.0.5",
+    "eslint": "^10.11.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-vue": "^10.11.1",
+    "globals": "^17.12.0",
+    "prettier": "^3.9.9",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.71.0",
+    "vitest": "^4.1.11",
+    "vue-eslint-parser": "^10.4.1"
+  }
+}
