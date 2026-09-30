@@ -57,6 +57,11 @@ tests do not need the build.
 - **PrimeVue 4.x / @primeuix/themes 2.x**, not 5. PrimeVue 5 needs a
   commercial license key per deployment, which a public image cannot ship.
 - **vitest 4.x** (matches amber). Majors are upgraded deliberately.
+- **@garmin/fitsdk** is Garmin's own FIT SDK (encoder and decoder) under the
+  FIT Protocol License, not an OSI license. It is a runtime dependency of
+  `shared`, so it ships in the image's `node_modules`. Only
+  `shared/src/fit/write.ts` and `read.ts` import it, so a swap stays local.
+  `shared` is marked `sideEffects: false` so the web bundle drops it.
 
 ## Commit messages
 
