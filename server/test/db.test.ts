@@ -26,7 +26,7 @@ afterEach(() => {
 describe("migrate", () => {
   it("applies the shipped migrations and is idempotent", () => {
     const db = openDatabase(":memory:");
-    expect(migrate(db, MIGRATIONS_DIR)).toEqual(["0001_settings.sql"]);
+    expect(migrate(db, MIGRATIONS_DIR)).toEqual(["0001_settings.sql", "0002_strava_tokens.sql"]);
     expect(migrate(db, MIGRATIONS_DIR)).toEqual([]);
     db.prepare("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)").run(
       "k",
@@ -41,7 +41,7 @@ describe("migrate", () => {
   it("creates the database file and parent directories on disk", () => {
     const path = join(tempDir(), "nested", "state", "cameld.db");
     const db = openDatabase(path);
-    expect(migrate(db, MIGRATIONS_DIR)).toHaveLength(1);
+    expect(migrate(db, MIGRATIONS_DIR)).toHaveLength(2);
     db.close();
   });
 

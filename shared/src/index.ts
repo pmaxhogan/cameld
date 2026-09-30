@@ -6,3 +6,4 @@ export * from "./fit/read.ts";
 export { ActivityReadError } from "./readers/xml.ts";
 export * from "./readers/gpx.ts";
 export * from "./readers/tcx.ts";
+export * from "./metadata/merge.ts";
