@@ -1,0 +1,20 @@
+{
+  "name": "@cameld/relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Email Worker that receives forwarded Strava login codes and hands them to the cameld server.",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "dev": "npx --yes wrangler@4 dev",
+    "deploy": "npx --yes wrangler@4 deploy",
+    "migrate:remote": "npx --yes wrangler@4 d1 migrations apply cameld-relay --remote"
+  },
+  "dependencies": {
+    "postal-mime": "^2.7.6"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260702.1"
+  },
+  "//wrangler": "wrangler is deliberately not a dependency: it is large, only the owner deploys, and CI never needs it. Scripts run it through npx."
+}

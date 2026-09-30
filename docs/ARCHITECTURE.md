@@ -51,6 +51,13 @@ cameld is a Node.js/TypeScript service that:
   may need a strava.com web session (a headless browser) where the API cannot
   do them. This is unofficial and may break, so it is isolated behind a small
   interface and health-checked.
+- When the web login asks for an emailed code, the code reaches cameld through
+  a relay: a Gmail filter forwards Strava code mail to an address handled by
+  Cloudflare Email Routing, a small Cloudflare Worker (`relay/`) accepts it
+  only from allowlisted `From:` domains (Strava, plus Gmail forwarding
+  confirmation), stores the code sealed with a 10 minute TTL, and the server
+  claims the oldest code newer than its request time, once, over HTTPS with a
+  bearer token. No Google credentials are held anywhere.
 
 ## 4. Merge rules
 
@@ -164,7 +171,7 @@ daily batches inside the rate limits.
 ## 8. Platform
 
 - **Stack.** Node 26 (engines >=24), npm workspaces (`shared`, `server`, `web`,
-  `e2e`), strict ESM TypeScript, Fastify, SQLite via `node:sqlite`, pino.
+  `e2e`, `relay`), strict ESM TypeScript, Fastify, SQLite via `node:sqlite`, pino.
   Front end: Vue 3, Vite, PrimeVue, MapLibre.
 - **Trigger.** Polling every 10 minutes. No webhook and no public callback.
 - **Web UI.** Review queue with map comparison; activity and merge history with

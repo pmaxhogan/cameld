@@ -1,0 +1,18 @@
+{
+  // cameld email-code relay. Deploy is manual: see "Relay" in CLAUDE.md.
+  "name": "cameld-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cameld-relay",
+      "database_id": "bfb7654a-05d7-43bb-8814-459a2607b59a",
+      "migrations_dir": "migrations",
+    },
+  ],
+  // Secrets (wrangler secret put, never in this file): DATA_KEY, RELAY_TOKEN.
+}

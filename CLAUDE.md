@@ -29,6 +29,7 @@ tests do not need the build.
 - `server/` Fastify service, SQLite (`node:sqlite`), pino, migrations
 - `web/` Vue 3 + Vite + PrimeVue + MapLibre single page app
 - `e2e/` Playwright smoke tests against the built server
+- `relay/` Cloudflare Email Worker that receives forwarded Strava login codes
 - `deploy/` example compose file; `docs/` architecture
 
 ## Invariants (never trade these away)
@@ -86,6 +87,28 @@ period. The body explains why. Architecture deviations are noted in the body.
   one; the runner refuses a changed or missing file.
 - Credentials never appear in argv, URLs, logs, API responses, or error
   messages.
+
+## Relay (relay/)
+
+A Cloudflare Worker (`cameld-relay`, D1 `cameld-relay`) that receives Strava
+login-code mail forwarded by a Gmail filter via Email Routing (address
+`2fa@<mail subdomain>`), seals the code in D1 (AES-GCM, 10 min TTL, single use)
+and serves it to the server over `GET /codes/next` and
+`GET /forwarding-confirmation` with a bearer token. The server side is
+`server/src/relay/client.ts` (`RELAY_URL`, `RELAY_TOKEN`).
+
+Deploy is MANUAL (CI has no Cloudflare credentials and never deploys it):
+
+```
+npm run migrate:remote -w relay   new migrations in relay/migrations/ first
+npm run deploy -w relay           wrangler deploy (npx wrangler@4; not a dependency)
+```
+
+Secrets are Worker secrets, set from stdin, never argv:
+`npx wrangler@4 secret put DATA_KEY < file` (base64 of 32 bytes) and
+`RELAY_TOKEN` (the same value as `RELAY_TOKEN` in the NAS env file). Tests run
+the pure modules and the real migration SQL through `node:sqlite`; they need no
+Workers runtime. Only synthetic mail in tests.
 
 ## Workflow
 

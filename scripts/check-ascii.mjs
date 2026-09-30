@@ -37,6 +37,7 @@ const SKIP_DIRS = new Set([
   "tmp",
   "tmp-data",
   ".vite",
+  ".wrangler",
 ]);
 
 const SKIP_FILES = new Set(["package-lock.json"]);

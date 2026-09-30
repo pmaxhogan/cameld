@@ -53,6 +53,10 @@ export const envSchema = z.object({
   VAPID_SUBJECT: optionalString,
 
   SNAPSHOT_HELPER_URL: optionalString,
+
+  /** Email-code relay Worker (relay/). Origin only, no trailing path. */
+  RELAY_URL: z.preprocess(blankAsUnset, z.string().url().optional()),
+  RELAY_TOKEN: optionalString,
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -89,6 +93,10 @@ export interface Config {
     vapidSubject: string | undefined;
   };
   snapshotHelperUrl: string | undefined;
+  relay: {
+    url: string | undefined;
+    token: string | undefined;
+  };
 }
 
 export class ConfigError extends Error {
@@ -145,5 +153,9 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
       vapidSubject: env.VAPID_SUBJECT,
     },
     snapshotHelperUrl: env.SNAPSHOT_HELPER_URL,
+    relay: {
+      url: env.RELAY_URL?.replace(/\/+$/, ""),
+      token: env.RELAY_TOKEN,
+    },
   };
 }

@@ -54,4 +54,14 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ PORT: "70000" })).toThrow(ConfigError);
     expect(() => loadConfig({ LOG_LEVEL: "loud" })).toThrow(ConfigError);
   });
+
+  it("reads the relay settings and strips a trailing slash", () => {
+    const config = loadConfig({
+      RELAY_URL: "https://relay.example.test/",
+      RELAY_TOKEN: " synthetic ",
+    });
+    expect(config.relay).toEqual({ url: "https://relay.example.test", token: "synthetic" });
+    expect(loadConfig({ RELAY_URL: "" }).relay.url).toBeUndefined();
+    expect(() => loadConfig({ RELAY_URL: "not a url" })).toThrow(ConfigError);
+  });
 });

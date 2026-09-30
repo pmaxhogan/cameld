@@ -22,6 +22,7 @@ export default tseslint.config(
       "**/playwright-report/**",
       "**/test-results/**",
       "tmp-data/**",
+      "**/.wrangler/**",
     ],
   },
   js.configs.recommended,

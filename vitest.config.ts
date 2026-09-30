@@ -26,6 +26,14 @@ export default defineConfig({
           hookTimeout: 30_000,
         },
       },
+      {
+        test: {
+          name: "relay",
+          root: "./relay",
+          environment: "node",
+          include: ["test/**/*.test.ts"],
+        },
+      },
       "./web/vitest.config.ts",
     ],
     coverage: {

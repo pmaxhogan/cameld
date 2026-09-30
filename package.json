@@ -13,7 +13,8 @@
     "shared",
     "server",
     "web",
-    "e2e"
+    "e2e",
+    "relay"
   ],
   "//typescript": "Pinned to 6.x, not the latest 7.x: typescript-eslint 8.71 declares peer typescript '>=4.8.4 <6.1.0', so TS 7 (the Go rewrite with an incompatible JS API) would break linting and vue-tsc. 6.0.3 is the newest release typescript-eslint accepts. Dependabot ignores the typescript major. Revisit when typescript-eslint ships TS 7 support.",
   "//vitest": "Pinned to the 4.x line, matching amber. Dependabot ignores the vitest and @vitest/coverage-v8 majors until the whole toolchain is moved deliberately.",
@@ -27,13 +28,14 @@
     "lint:ascii": "node scripts/check-ascii.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "npm run build -w shared && npm run typecheck -w shared && npm run typecheck -w server && npm run typecheck -w web && npm run typecheck -w e2e",
+    "typecheck": "npm run build -w shared && npm run typecheck -w shared && npm run typecheck -w server && npm run typecheck -w web && npm run typecheck -w e2e && npm run typecheck -w relay",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "npm run test:e2e -w e2e",
     "coverage:ratchet": "node scripts/coverage-ratchet.mjs",
-    "coverage:ratchet:write": "node scripts/coverage-ratchet.mjs --write"
+    "coverage:ratchet:write": "node scripts/coverage-ratchet.mjs --write",
+    "deploy:relay": "npm run deploy -w relay"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
