@@ -16,7 +16,7 @@ interface Recorded {
   method: string;
   url: URL;
   headers: Headers;
-  body: BodyInit | null | undefined;
+  body: RequestInit["body"];
 }
 
 type Handler = (req: Recorded, n: number) => Response | Promise<Response>;
