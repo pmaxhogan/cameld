@@ -30,6 +30,7 @@ describe("migrate", () => {
       "0001_settings.sql",
       "0002_strava_tokens.sql",
       "0003_merge_state.sql",
+      "0004_ui.sql",
     ]);
     expect(migrate(db, MIGRATIONS_DIR)).toEqual([]);
     db.prepare("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)").run(
@@ -45,7 +46,7 @@ describe("migrate", () => {
   it("creates the database file and parent directories on disk", () => {
     const path = join(tempDir(), "nested", "state", "cameld.db");
     const db = openDatabase(path);
-    expect(migrate(db, MIGRATIONS_DIR)).toHaveLength(3);
+    expect(migrate(db, MIGRATIONS_DIR)).toHaveLength(4);
     db.close();
   });
 

@@ -8,7 +8,7 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
 import selfsigned from "selfsigned";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -84,7 +84,7 @@ function fakeUpstream(server: Server, seen: Seen[]): void {
 }
 
 async function proxyApp(proxy: VncProxy): Promise<{ app: FastifyInstance; port: number }> {
-  const app = Fastify({ loggerInstance: log });
+  const app = Fastify({ loggerInstance: log as FastifyBaseLogger }) as unknown as FastifyInstance;
   app.get(`${BROWSER_PREFIX}*`, (req, reply) => proxy.handle(req, reply));
   app.server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) =>
     proxy.upgrade(req, socket, head),
@@ -377,7 +377,7 @@ describe("VncProxy over https with the sidecar's self-signed certificate", () =>
 
   beforeAll(async () => {
     const attrs = [{ name: "commonName", value: "localhost" }];
-    const options = {
+    const options: Parameters<typeof selfsigned.generate>[1] = {
       keySize: 2048,
       extensions: [
         { name: "basicConstraints", cA: true },
