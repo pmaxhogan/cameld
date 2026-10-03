@@ -226,13 +226,48 @@ daily batches inside the rate limits.
   `e2e`, `relay`), strict ESM TypeScript, Fastify, SQLite via `node:sqlite`, pino.
   Front end: Vue 3, Vite, PrimeVue, MapLibre.
 - **Trigger.** Polling every 10 minutes. No webhook and no public callback.
-- **Web UI.** Review queue with map comparison; activity and merge history with
-  restore; backfill control and status (rate budget, login health); settings
-  (grace period, thresholds, switches for hide, delete and upload).
+- **Web UI.** Review queue with side-by-side and overlay map comparison of
+  both tracks and the merge preview (built in memory exactly as the state
+  machine would); activity and merge history with the per-group event
+  timeline, evidence, write journal and a restore action; backfill control
+  and status (rate budget, login health, progress, the dry-run report);
+  settings (grace period, partner wait, thresholds, switches for hide,
+  delete, upload and the deletion trial); a "Strava login" panel that embeds
+  the browser sidecar's KasmVNC client. Maps use a keyless MapLibre style
+  (`MAP_STYLE_URL`, OpenFreeMap by default). Every UI write is recorded in
+  the `audit_log` table with the Access identity.
 - **Access.** Served through an existing Cloudflare Tunnel at a hostname such
-  as `cameld.example.com`, behind Cloudflare Access verified by the server,
-  plus a secondary backup password.
-- **Notifications.** Web Push with VAPID keys.
+  as `cameld.example.com`. Two gates, both required for the SPA, `/api/*`
+  and `/browser/*` (only `GET /healthz` and `/metrics` are open): (1) the
+  Cloudflare Access JWT, verified by the server (RS256 against the team's
+  keys, cached an hour and refetched on an unknown key id at most once a
+  minute; `iss`, `aud`, `exp`/`nbf` with 30 s skew, and the `email`
+  claim must equal `ALLOWED_EMAIL`); (2) the secondary backup password:
+  `POST /login` checks it against a PBKDF2-SHA256 hash
+  (`UI_PASSWORD_HASH`, from `scripts/hash-password.ts`), rate limited per
+  client and globally, and sets a 90 day HMAC session cookie (HttpOnly,
+  Secure, SameSite=Strict) bound to the identity and the password hash. The
+  login page needs Access but not the session. State-changing requests need
+  the `X-Requested-With: cameld` header or an Origin equal to `PUBLIC_URL`;
+  WebSocket upgrades need that Origin and both gates. Missing auth
+  configuration fails closed. Turning deletion or the deletion trial on
+  through the API also needs the typed confirmation phrase.
+- **Browser sidecar view.** `/browser/` is a same-origin proxy to the
+  sidecar's KasmVNC client (`BROWSER_VNC_URL`), GET and WebSocket only. The
+  proxy injects the sidecar's basic-auth credentials server side, forwards an
+  allowlist of headers (never the owner's cookies or the Access JWT), builds
+  every upstream URL by setting the path on a copy of the base (refusing
+  schemes, backslashes, dot segments and control characters) and checks the
+  result stays on that origin before attaching credentials. TLS stays
+  verified: the sidecar's self-signed certificate is the only trust anchor
+  of the proxy's agent (`BROWSER_VNC_CA_FILE`), optionally pinned by
+  SHA-256 (`BROWSER_VNC_CERT_SHA256`).
+- **Notifications.** Web Push with VAPID keys (the `web-push` package),
+  subscriptions in SQLite, a service worker in the SPA. Every owner
+  notification is logged and pushed: writes frozen, failed merge, login
+  expired, parked pair, pair needs review, backfill batch done, deletion
+  trial done, restore flagged. Subscriptions the push service reports gone
+  (404/410) are deleted.
 - **Deploy.** A TrueNAS custom app that auto-pulls the latest image from GHCR,
   running as an unprivileged uid with no published ports (see
   `deploy/compose.example.yml`).

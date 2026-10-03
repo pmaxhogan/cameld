@@ -11,7 +11,10 @@ Never close the browser, never touch other tabs, never log out.
 
 - Login is email plus an emailed 6-digit code (no password). An invisible
   reCAPTCHA Enterprise guards `POST /login/request_otp`; scripted requests
-  get 403. The owner logs in by hand once through the sidecar's web VNC.
+  get 403. The owner logs in by hand once through the sidecar's web VNC,
+  embedded in the UI's "Strava login" panel (`/browser/`, proxied through
+  cameld's own origin so it sits behind Cloudflare Access and the password
+  gate; see ARCHITECTURE.md section 8), then presses "Check login".
 - Keep the session alive by loading `/dashboard` about hourly in a new page.
   Logged in = not redirected to `/login` and the athlete menu is present.
 - On expiry: try one automatic login (code via the relay,
