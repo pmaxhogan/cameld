@@ -52,7 +52,14 @@ export type FakeMode =
   /** PUT /photos/metadata answers something that is not an upload target. */
   | "bad_metadata"
   /** Attached photos never show up on the edit form. */
-  | "hide_new_photos";
+  | "hide_new_photos"
+  /**
+   * Like Strava's React edit page: the visibility radios are missing from
+   * the HTML and injected by script `hydrateMs` after load.
+   */
+  | "late_hydration"
+  /** The visibility radios never appear (the page never hydrates). */
+  | "never_hydrates";
 
 export interface RecordedRequest {
   method: string;
@@ -70,6 +77,8 @@ export interface FakeStrava {
   baseUrl: string;
   mode: FakeMode;
   slowMs: number;
+  /** Delay before the late_hydration script injects the visibility radios. */
+  hydrateMs: number;
   activities: Map<number, FakeActivity>;
   requests: RecordedRequest[];
   /** Login codes "emailed" by request_otp, newest last. */
@@ -116,12 +125,42 @@ function option(value: string, current: string, label = value): string {
   return `<option value="${value}"${value === current ? " selected" : ""}>${escapeHtml(label)}</option>`;
 }
 
+function radios(name: string, values: string[], current: string): string {
+  return values
+    .map(
+      (v) =>
+        `<label><input type="radio" name="${name}" value="${v}"${v === current ? " checked" : ""}> ${v}</label>`,
+    )
+    .join("");
+}
+
+type Hydration = "server" | "late" | "never";
+
 function editPage(
   activity: FakeActivity,
   csrf: string,
   withForm: boolean,
   withMeta: boolean,
+  hydration: Hydration = "server",
+  hydrateMs = 0,
 ): string {
+  const visibility = radios(
+    "activity[visibility]",
+    ["everyone", "followers_only", "only_me"],
+    activity.visibility,
+  );
+  // An inert <template> is not part of FormData until the script clones it.
+  const visibilityHtml =
+    hydration === "server"
+      ? visibility
+      : `<span id="visibility-slot"></span><template id="visibility-template">${visibility}</template>`;
+  const script =
+    hydration === "late"
+      ? `<script>setTimeout(() => {
+  const template = document.getElementById("visibility-template");
+  document.getElementById("visibility-slot").appendChild(template.content.cloneNode(true));
+}, ${hydrateMs});</script>`
+      : "";
   const photos = activity.photos
     .map(
       (p) =>
@@ -141,7 +180,7 @@ function editPage(
 <textarea name="activity[description]">${escapeHtml(activity.description)}</textarea>
 <select name="activity[sport_type]">${["Run", "Ride", "Walk", "Hike"].map((v) => option(v, activity.sportType)).join("")}</select>
 <textarea name="activity[private_note]">${escapeHtml(activity.privateNote)}</textarea>
-<select name="activity[visibility]">${["everyone", "followers_only", "only_me"].map((v) => option(v, activity.visibility)).join("")}</select>
+${visibilityHtml}
 <select name="activity[perceived_exertion]">${exertion}</select>
 ${checkbox("activity[prefer_perceived_exertion]", activity.preferPerceivedExertion)}
 ${checkbox("activity[hide_from_home]", activity.hideFromHome)}
@@ -150,7 +189,8 @@ ${photos}
 <input type="file" name="activity[photo_file]">
 <button type="submit" name="commit" value="Save">Save</button>
 </form>
-<a data-method="delete" data-confirm="Are you sure?" href="/activities/${activity.id}" rel="nofollow">Delete</a>`;
+<a data-method="delete" data-confirm="Are you sure?" href="/activities/${activity.id}" rel="nofollow">Delete</a>
+${script}`;
   return layout(
     `Edit ${activity.name}`,
     withForm ? form : "<p>Edit is unavailable.</p>",
@@ -221,6 +261,7 @@ export async function startFakeStrava(): Promise<FakeStrava> {
     baseUrl: "",
     mode: "normal",
     slowMs: 5000,
+    hydrateMs: 1500,
     activities: new Map(syntheticActivities().map((a) => [a.id, a])),
     requests: [],
     mailbox: [],
@@ -370,9 +411,20 @@ export async function startFakeStrava(): Promise<FakeStrava> {
     const activity = activityOr404(request.params.id, reply);
     if (activity === null) return reply;
     if (fake.mode === "slow_edit") await new Promise((r) => setTimeout(r, fake.slowMs));
+    const hydration: Hydration =
+      fake.mode === "late_hydration" ? "late" : fake.mode === "never_hydrates" ? "never" : "server";
     return reply
       .type("text/html")
-      .send(editPage(activity, session.csrf, fake.mode !== "no_form", fake.mode !== "no_meta"));
+      .send(
+        editPage(
+          activity,
+          session.csrf,
+          fake.mode !== "no_form",
+          fake.mode !== "no_meta",
+          hydration,
+          fake.hydrateMs,
+        ),
+      );
   });
 
   app.post<{ Params: { id: string } }>("/activities/:id", (request, reply) => {

@@ -37,7 +37,8 @@ Edit form fields:
 - `activity[visibility]` one of `everyone`, `followers_only`, `only_me`
   ("Only You" = hidden)
 - `activity[perceived_exertion]` plus `activity[prefer_perceived_exertion]`
-- `activity[hide_from_home]` (mute)
+- `activity[hide_from_home]` (mute); the live site sends `true` when on.
+  cameld reads `true`, `1` and `on` (any case) as on.
 - name, description, sport type, gear, stats visibility, tags are also on
   the form; prefer the API for fields it supports.
 
@@ -74,6 +75,19 @@ cookies alive (an integration test checks this).
 
 - Requests are in-page `fetch` calls with credentials (`in-page.ts`, the only
   code that runs in the browser) to URLs built from a validated numeric id.
+- The edit form is hydrated by Strava's React code AFTER the HTML loads: the
+  `activity[visibility]` radios were missing in 7 of 10 live reads taken at
+  load and present in 4 of 4 taken 6 s later. A form read (or POSTed) too
+  early would reset the visibility. So every form read first waits
+  (`page.waitForFunction`, polling every 100 ms, bounded by
+  `formHydrationTimeoutMs`, default 15000) until the form has a non-empty
+  `authenticity_token`, a CHECKED `activity[visibility]` radio and the
+  `activity[private_note]` field. If it is not hydrated in time it throws
+  `WebNotReadyError` (`not_ready`) and sends nothing; a page with no activity
+  form at all is still `WebUnexpectedResponseError`. Independently, every
+  POST of the form (edit, delete, photo attach) refuses with
+  `WebNotReadyError` if the body it is about to send lacks any of those
+  required fields (`assertSubmittable`).
 - Edits read the whole form as `FormData` entries, change only the target
   field(s), POST everything back with `_method=patch` and the form's
   `authenticity_token` (plus `X-CSRF-Token`), then re-read the form and throw
@@ -122,6 +136,8 @@ success. The state machine must ALSO confirm deletion through the API
 `server/test/fake-strava/` is a synthetic, Rails-like fake of these pages. It
 resets any field missing from a PATCH, carries a `data-method=delete` Log Out
 link on every page, and has modes for expiry, captcha, 403, 429, refused
-`request_otp`, slow pages and failed saves. The integration tests spawn a real
+`request_otp`, slow pages and failed saves. Its visibility control is radios,
+like Strava's; `late_hydration` injects them by script `hydrateMs` (1500)
+after load and `never_hydrates` never does. The integration tests spawn a real
 Chromium with `--remote-debugging-port` and connect over CDP, like the
 sidecar. CI installs it with `npx playwright install --with-deps chromium`.

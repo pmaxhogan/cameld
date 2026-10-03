@@ -12,6 +12,7 @@ import {
   DeletionUnauthorizedError,
   LoginRequiredError,
   WebNotFoundError,
+  WebNotReadyError,
   WebUnexpectedResponseError,
 } from "../src/web/errors.ts";
 import {
@@ -20,11 +21,12 @@ import {
   FIELD,
   type FormEntries,
   lastValue,
+  missingRequiredFields,
   photoIds,
   readValues,
   setEntry,
 } from "../src/web/forms.ts";
-import { deletionConfirmed, parseUploadTarget } from "../src/web/session.ts";
+import { assertSubmittable, deletionConfirmed, parseUploadTarget } from "../src/web/session.ts";
 
 const BASE = "https://www.example.test";
 
@@ -131,6 +133,64 @@ describe("form entries", () => {
       preferPerceivedExertion: false,
       hideFromHome: false,
     });
+  });
+
+  it("reads hide_from_home as on for true, 1 and on, in any case", () => {
+    const hidden = (value: string) =>
+      readValues([
+        [FIELD.hideFromHome, "false"],
+        [FIELD.hideFromHome, value],
+      ]).hideFromHome;
+    for (const on of ["true", "TRUE", "True", "1", "on", "ON"]) expect(hidden(on)).toBe(true);
+    for (const off of ["false", "0", "off", ""]) expect(hidden(off)).toBe(false);
+    expect(readValues([]).hideFromHome).toBe(false);
+  });
+
+  it("lists required fields a form lacks", () => {
+    const complete: FormEntries = [
+      ["authenticity_token", "synthetic-token"],
+      [FIELD.privateNote, ""],
+      [FIELD.visibility, "only_me"],
+    ];
+    expect(missingRequiredFields(complete)).toEqual([]);
+    expect(missingRequiredFields([])).toEqual([
+      "authenticity_token",
+      FIELD.visibility,
+      FIELD.privateNote,
+    ]);
+    expect(
+      missingRequiredFields([
+        ["authenticity_token", ""],
+        [FIELD.privateNote, "kept"],
+        [FIELD.visibility, ""],
+      ]),
+    ).toEqual(["authenticity_token", FIELD.visibility]);
+  });
+
+  it("refuses to submit a form without its required fields", () => {
+    const path = "/activities/7000001";
+    expect(() =>
+      assertSubmittable(path, [
+        ["_method", "patch"],
+        ["authenticity_token", "synthetic-token"],
+        [FIELD.privateNote, "x"],
+        [FIELD.visibility, "everyone"],
+      ]),
+    ).not.toThrow();
+    const error = (() => {
+      try {
+        assertSubmittable(path, [
+          ["authenticity_token", "synthetic-token"],
+          [FIELD.privateNote, "x"],
+        ]);
+      } catch (e) {
+        return e;
+      }
+      return null;
+    })();
+    expect(error).toBeInstanceOf(WebNotReadyError);
+    expect((error as WebNotReadyError).fields).toEqual([FIELD.visibility]);
+    expect((error as WebNotReadyError).message).not.toContain("synthetic-token");
   });
 
   it("replaces every occurrence in place, or appends", () => {

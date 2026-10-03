@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { type Browser, chromium, type Page } from "playwright-core";
+import { type Browser, chromium, errors as playwrightErrors, type Page } from "playwright-core";
 
 import type { Logger } from "../logging.ts";
 import { RelayError, type RelayClient } from "../relay/client.ts";
@@ -11,6 +11,7 @@ import {
   ChallengeError,
   DeletionNotConfirmedError,
   LoginRequiredError,
+  WebNotReadyError,
   WebSessionError,
   WebTimeoutError,
   WebUnexpectedResponseError,
@@ -23,13 +24,14 @@ import {
   FIELD,
   type FormEntries,
   lastValue,
+  missingRequiredFields,
   normalizeText,
   photoIds,
   readValues,
   VISIBILITIES,
   type Visibility,
 } from "./forms.ts";
-import { type InPageBody, inPageFetch, readActivityForm } from "./in-page.ts";
+import { activityFormHydrated, type InPageBody, inPageFetch, readActivityForm } from "./in-page.ts";
 
 /**
  * The strava.com web session (docs/STRAVA-WEB.md). Drives the cameld-browser
@@ -151,6 +153,11 @@ export interface WebSessionOptions {
   athleteMenuSelector?: string;
   /** Page every non-edit operation starts from. Default /dashboard. */
   landingPath?: string;
+  /**
+   * How long an edit page may take to hydrate (Strava renders the visibility
+   * radios client-side after load) before WebNotReadyError. Default 15000.
+   */
+  formHydrationTimeoutMs?: number;
   /** Bound on closing a page, which can hang on a wedged page. Default 5000. */
   pageCloseTimeoutMs?: number;
   /** Injection point for tests. Default chromium.connectOverCDP. */
@@ -193,6 +200,7 @@ export class WebSession implements StravaWebSession {
   readonly #menuSelector: string;
   readonly #landingPath: string;
   readonly #pageCloseTimeoutMs: number;
+  readonly #formHydrationTimeoutMs: number;
   #browser: Browser | null = null;
   #queue: Promise<unknown> = Promise.resolve();
   #loginAttempted = false;
@@ -208,6 +216,7 @@ export class WebSession implements StravaWebSession {
     this.#menuSelector = options.athleteMenuSelector ?? DEFAULT_ATHLETE_MENU_SELECTOR;
     this.#landingPath = options.landingPath ?? "/dashboard";
     this.#pageCloseTimeoutMs = options.pageCloseTimeoutMs ?? 5000;
+    this.#formHydrationTimeoutMs = options.formHydrationTimeoutMs ?? 15_000;
   }
 
   // ---------------------------------------------------------------- health
@@ -421,14 +430,36 @@ export class WebSession implements StravaWebSession {
     });
   }
 
+  /**
+   * Load the edit page, wait until Strava's React code has hydrated the form
+   * (token, a checked visibility radio, the private note field), then read
+   * it. Reading at load would miss the visibility radios, and POSTing that
+   * would reset the activity's visibility.
+   */
   async #readForm(page: Page, activityId: number): Promise<EditForm> {
     const path = `/activities/${activityId}/edit`;
+    const activityPath = `/activities/${activityId}`;
     await this.#navigate(page, path);
-    const snapshot = await page.evaluate(readActivityForm, `/activities/${activityId}`);
-    const authenticityToken =
-      snapshot === null ? null : lastValue(snapshot.entries, "authenticity_token");
-    if (snapshot === null || authenticityToken === null || authenticityToken === "")
-      throw new WebUnexpectedResponseError(`${path} has no activity form`);
+    let hydrated = true;
+    try {
+      await page.waitForFunction(activityFormHydrated, activityPath, {
+        timeout: this.#formHydrationTimeoutMs,
+        polling: 100,
+      });
+    } catch (error) {
+      if (!(error instanceof playwrightErrors.TimeoutError)) throw error;
+      hydrated = false;
+    }
+    const snapshot = await page.evaluate(readActivityForm, activityPath);
+    if (snapshot === null) throw new WebUnexpectedResponseError(`${path} has no activity form`);
+    const missing = missingRequiredFields(snapshot.entries);
+    if (!hydrated || missing.length > 0)
+      throw new WebNotReadyError(
+        path,
+        missing,
+        hydrated ? "incomplete" : `not hydrated after ${this.#formHydrationTimeoutMs} ms`,
+      );
+    const authenticityToken = lastValue(snapshot.entries, "authenticity_token") as string;
     return {
       activityId,
       csrfToken: snapshot.csrfToken ?? authenticityToken,
@@ -445,14 +476,14 @@ export class WebSession implements StravaWebSession {
     changes: FormEntries = [],
     allowNotFound = false,
   ): Promise<Fetched> {
+    const path = `/activities/${form.activityId}`;
+    const entries = buildSubmission(form.entries, form.authenticityToken, method, changes);
+    assertSubmittable(path, entries);
     return this.#fetch(
       page,
       "POST",
-      `/activities/${form.activityId}`,
-      {
-        kind: "form",
-        entries: buildSubmission(form.entries, form.authenticityToken, method, changes),
-      },
+      path,
+      { kind: "form", entries },
       { "x-csrf-token": form.csrfToken, accept: "text/html" },
       allowNotFound,
     );
@@ -687,6 +718,15 @@ export class WebSession implements StravaWebSession {
     if (error !== null) throw error;
     return { status: response.status, url: response.url, headers: response.headers, bytes };
   }
+}
+
+/**
+ * Refuse to POST a form that lacks a required field (token, visibility,
+ * private note): Strava resets whatever a submission leaves out.
+ */
+export function assertSubmittable(path: string, entries: FormEntries): void {
+  const missing = missingRequiredFields(entries);
+  if (missing.length > 0) throw new WebNotReadyError(path, missing, "refusing to submit");
 }
 
 /** Pages Strava sends a logged-in browser to once an activity is gone. */

@@ -109,3 +109,24 @@ export function readActivityForm(activityPath: string): FormSnapshot | null {
   const meta = document.querySelector('meta[name="csrf-token"]');
   return { entries, csrfToken: meta === null ? null : meta.getAttribute("content") };
 }
+
+/**
+ * True once the activity form is fully hydrated: Strava's React code renders
+ * the visibility radios after load. Requires a non-empty authenticity_token,
+ * a checked `activity[visibility]` radio and the `activity[private_note]`
+ * field. Same form selection as readActivityForm. Polled by waitForFunction.
+ */
+export function activityFormHydrated(activityPath: string): boolean {
+  for (const candidate of document.querySelectorAll("form")) {
+    const path = new URL(candidate.action, location.href).pathname;
+    const token = candidate.querySelector('input[name="authenticity_token"]');
+    if (path !== activityPath || token === null) continue;
+    return (
+      (token.getAttribute("value") ?? "") !== "" &&
+      candidate.querySelector('input[type="radio"][name="activity[visibility]"]:checked') !==
+        null &&
+      candidate.querySelector('[name="activity[private_note]"]') !== null
+    );
+  }
+  return false;
+}

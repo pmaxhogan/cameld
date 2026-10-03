@@ -91,6 +91,26 @@ describe("WebSession edge paths", () => {
     await expect(web.getEditForm(1)).rejects.toThrow(TypeError);
   });
 
+  it("passes a non-timeout failure of the hydration wait through without reading", async () => {
+    let evaluated = 0;
+    const page = {
+      ...stubPage(),
+      goto: () => Promise.resolve({ status: () => 200 }),
+      url: () => "https://www.strava.com/activities/1/edit",
+      content: () => Promise.resolve("<html><body>synthetic</body></html>"),
+      waitForFunction: () => Promise.reject(new TypeError("synthetic page crash")),
+      evaluate: () => {
+        evaluated += 1;
+        return Promise.resolve(null);
+      },
+    };
+    const web = session(
+      stubBrowser([{ newPage: () => Promise.resolve(page as unknown as StubPage) }]),
+    );
+    await expect(web.getEditForm(1)).rejects.toThrow("synthetic page crash");
+    expect(evaluated).toBe(0);
+  });
+
   it("disconnect without a connection is a no-op", async () => {
     await new WebSession({ cdpUrl: "http://browser.example.test:9222" }).disconnect();
   });

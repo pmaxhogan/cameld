@@ -12,6 +12,7 @@ import {
   DeletionUnauthorizedError,
   LoginRequiredError,
   WebNotFoundError,
+  WebNotReadyError,
   WebTimeoutError,
   WebUnexpectedResponseError,
   WebVerificationError,
@@ -117,6 +118,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   fake.mode = "normal";
+  fake.hydrateMs = 1500;
   fake.acceptCodes = true;
   fake.activities = new Map(syntheticActivities().map((a) => [a.id, a]));
   fake.mailbox.length = 0;
@@ -285,7 +287,62 @@ describe("edit form", () => {
 
   it("reports a page without the activity form", async () => {
     fake.mode = "no_form";
-    await expect(open().getEditForm(RUN_ID)).rejects.toBeInstanceOf(WebUnexpectedResponseError);
+    await expect(open({ formHydrationTimeoutMs: 500 }).getEditForm(RUN_ID)).rejects.toBeInstanceOf(
+      WebUnexpectedResponseError,
+    );
+  });
+});
+
+describe("form hydration", () => {
+  const posts = () => fake.requests.filter((r) => r.method === "POST");
+
+  it("waits for the visibility radios before reading the form", async () => {
+    fake.mode = "late_hydration";
+    const started = Date.now();
+    const form = await open().getEditForm(RIDE_ID);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1000);
+    expect(form.values.visibility).toBe("followers_only");
+    expect(form.entries).toContainEqual(["activity[visibility]", "followers_only"]);
+  });
+
+  it("waits before editing, so the save keeps the current visibility", async () => {
+    fake.mode = "late_hydration";
+    const session = open();
+    const note = "synthetic hydrated note";
+    expect(await session.setPrivateNote(RIDE_ID, note)).toMatchObject({
+      privateNote: note,
+      visibility: "followers_only",
+    });
+    expect(fake.activities.get(RIDE_ID)).toMatchObject({
+      privateNote: note,
+      visibility: "followers_only",
+      commute: true,
+    });
+    expect((await session.setVisibility(RIDE_ID, "only_me")).visibility).toBe("only_me");
+    const body = posts()[0]?.body as [string, string][];
+    expect(body).toContainEqual(["activity[visibility]", "followers_only"]);
+  });
+
+  it("throws WebNotReadyError and never posts when the page never hydrates", async () => {
+    fake.mode = "never_hydrates";
+    const session = open({ formHydrationTimeoutMs: 1000 });
+    const read = await session.getEditForm(RIDE_ID).catch((e: unknown) => e);
+    expect(read).toBeInstanceOf(WebNotReadyError);
+    expect((read as WebNotReadyError).code).toBe("not_ready");
+    expect((read as WebNotReadyError).fields).toEqual(["activity[visibility]"]);
+    await expect(session.setVisibility(RIDE_ID, "only_me")).rejects.toBeInstanceOf(
+      WebNotReadyError,
+    );
+    await expect(session.setPrivateNote(RIDE_ID, "x")).rejects.toBeInstanceOf(WebNotReadyError);
+    await expect(session.deleteActivity(RIDE_ID, authorize(RIDE_ID))).rejects.toBeInstanceOf(
+      WebNotReadyError,
+    );
+    expect(posts()).toEqual([]);
+    expect(fake.activities.get(RIDE_ID)).toMatchObject({
+      visibility: "followers_only",
+      privateNote: "",
+      exists: true,
+    });
   });
 });
 

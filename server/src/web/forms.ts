@@ -48,6 +48,31 @@ export function normalizeText(value: string): string {
   return value.replace(/\r\n?/g, "\n");
 }
 
+/** Checkbox values Strava and Rails use for "on" ("true" on the live site). */
+const ON_VALUES = new Set(["true", "1", "on"]);
+
+function isOn(value: string | null): boolean {
+  return value !== null && ON_VALUES.has(value.trim().toLowerCase());
+}
+
+/**
+ * Fields a complete (hydrated) edit form always carries. Strava renders the
+ * visibility radios client-side; a form read or POSTed without them would
+ * reset the activity's visibility.
+ */
+export const REQUIRED_FIELDS = ["authenticity_token", FIELD.visibility, FIELD.privateNote] as const;
+
+/**
+ * Required fields absent from `entries`. The token and visibility must also
+ * be non-empty; an empty private note is a real value.
+ */
+export function missingRequiredFields(entries: FormEntries): string[] {
+  return REQUIRED_FIELDS.filter((name) => {
+    const value = lastValue(entries, name);
+    return value === null || (name !== FIELD.privateNote && value === "");
+  });
+}
+
 export function readValues(entries: FormEntries): EditFormValues {
   const visibility = lastValue(entries, FIELD.visibility);
   const exertion = Number.parseInt(lastValue(entries, FIELD.perceivedExertion) ?? "", 10);
@@ -56,7 +81,7 @@ export function readValues(entries: FormEntries): EditFormValues {
     visibility: VISIBILITIES.includes(visibility as Visibility) ? (visibility as Visibility) : null,
     perceivedExertion: Number.isInteger(exertion) ? exertion : null,
     preferPerceivedExertion: lastValue(entries, FIELD.preferPerceivedExertion) === "1",
-    hideFromHome: lastValue(entries, FIELD.hideFromHome) === "1",
+    hideFromHome: isOn(lastValue(entries, FIELD.hideFromHome)),
   };
 }
 

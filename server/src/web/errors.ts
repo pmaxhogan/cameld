@@ -12,6 +12,7 @@ export type WebErrorCode =
   | "challenge"
   | "browser_unavailable"
   | "timeout"
+  | "not_ready"
   | "not_found"
   | "unexpected_response"
   | "verification_failed"
@@ -58,6 +59,19 @@ export class WebTimeoutError extends WebSessionError {
   override readonly name = "WebTimeoutError";
   constructor(operation: string, timeoutMs: number) {
     super("timeout", `web operation ${operation} timed out after ${timeoutMs} ms`);
+  }
+}
+
+/**
+ * The edit form never became complete (Strava's React code had not hydrated
+ * it), or a form about to be POSTed lacks a required field. Nothing was sent.
+ */
+export class WebNotReadyError extends WebSessionError {
+  override readonly name = "WebNotReadyError";
+  readonly fields: string[];
+  constructor(path: string, fields: string[], detail: string) {
+    super("not_ready", `${path} form is not ready (${detail}): missing ${fields.join(", ")}`);
+    this.fields = fields;
   }
 }
 
