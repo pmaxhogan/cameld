@@ -112,5 +112,8 @@ Workers runtime. Only synthetic mail in tests.
 
 ## Workflow
 
-Push to main is gated by local lint, typecheck, and tests. Red CI is fixed
-forward, never reverted. `.claude/cameld-spec.md` is private and gitignored.
+Main is protected: changes go through pull requests, never direct pushes. Open
+a PR and run `gh pr merge --auto --squash`; it merges once the CI checks pass
+(no approvals required, branches need not be up to date). Dependabot minor and
+patch PRs are approved and auto-merged by workflow; majors need manual review.
+Red CI is fixed forward, never reverted. `.claude/cameld-spec.md` is private and gitignored.
