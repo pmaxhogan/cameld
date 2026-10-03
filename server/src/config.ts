@@ -55,6 +55,8 @@ export const envSchema = z.object({
   VAPID_SUBJECT: optionalString,
 
   SNAPSHOT_HELPER_URL: optionalString,
+  /** Bearer token the snapshot helper requires (deploy/snapshot-helper/). */
+  SNAPSHOT_HELPER_TOKEN: optionalString,
 
   /** Email-code relay Worker (relay/). Origin only, no trailing path. */
   RELAY_URL: z.preprocess(blankAsUnset, z.string().url().optional()),
@@ -102,6 +104,7 @@ export interface Config {
     vapidSubject: string | undefined;
   };
   snapshotHelperUrl: string | undefined;
+  snapshotHelperToken: string | undefined;
   relay: {
     url: string | undefined;
     token: string | undefined;
@@ -166,6 +169,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
       vapidSubject: env.VAPID_SUBJECT,
     },
     snapshotHelperUrl: env.SNAPSHOT_HELPER_URL,
+    snapshotHelperToken: env.SNAPSHOT_HELPER_TOKEN,
     relay: {
       url: env.RELAY_URL?.replace(/\/+$/, ""),
       token: env.RELAY_TOKEN,

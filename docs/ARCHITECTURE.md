@@ -175,14 +175,45 @@ daily batches inside the rate limits.
 - The data lives on its own ZFS dataset. Snapshots are taken daily and kept
   indefinitely, plus one immediately before every delete.
 - The service must not receive a privileged container or the Docker socket.
-  Snapshots are requested through a narrowly scoped TrueNAS API key (snapshot
-  create on that dataset only) if the platform supports that scope, otherwise
-  through a tiny host-side helper that snapshots on request
-  (`SNAPSHOT_HELPER_URL`). Implemented choice: the host-side helper.
-  `POST <SNAPSHOT_HELPER_URL>/snapshot` with JSON `{"label": "<a-z0-9_->"}`
-  answers 200 `{"snapshot": "<dataset>@<name>"}`; anything else means no
-  snapshot, and nothing is deleted. The helper snapshots one fixed dataset
-  and takes nothing else from the request (`server/src/service/snapshotter.ts`).
+  Snapshots come from a tiny host-side helper (`deploy/snapshot-helper/`).
+  `POST <SNAPSHOT_HELPER_URL>/snapshot` with `authorization: Bearer
+  <SNAPSHOT_HELPER_TOKEN>` and JSON `{"label": "<a-z0-9_->"}` answers 200
+  `{"snapshot": "<dataset>@cameld-<label>-<UTC stamp>"}`; anything else means
+  no snapshot, and nothing is deleted. The helper snapshots one dataset fixed
+  on its command line and takes nothing else from the request
+  (`server/src/service/snapshotter.ts`).
+- Why not a TrueNAS API key (decided in Wave 6, TrueNAS SCALE 25.10): API keys
+  inherit their user's privilege roles, and roles are method-level, never
+  per-dataset. The narrowest role that can call `pool.snapshot.create` is
+  `SNAPSHOT_WRITE`, and the middleware's own method table shows that role also
+  grants `pool.snapshot.rollback`, `pool.dataset.destroy_snapshots`,
+  `pool.snapshot.rename` and `pool.snapshot.update` on every dataset. A key
+  that can roll back or destroy snapshots fails the backup invariant, so it
+  was rejected without minting one.
+- How the helper is confined: it runs as a dedicated non-root host user
+  whose only ZFS right is a kernel-enforced delegation,
+  `zfs allow -l -u <user> snapshot <dataset>`. Tested on the host as that
+  user: snapshot of the dataset succeeds; destroy, rollback, rename, property
+  changes and snapshots of any other dataset (parent included) are all
+  denied. The helper also needs a bearer token (a file readable by root and
+  that user only), caps itself at 120 snapshots per hour, and its code and
+  token live outside the app's data mount so the container cannot change
+  them. It is a transient systemd unit (`systemd-run`, `Restart=always`)
+  started by a TrueNAS POSTINIT init script, because the TrueNAS root
+  filesystem is replaced on upgrade. The container reaches it on the shared
+  apps bridge's gateway address (the host's LAN address is not routable from
+  app containers).
+- Daily snapshots come from a TrueNAS periodic snapshot task on the dataset
+  (`cameld-auto-%Y%m%d-%H%M`, lifetime 100 years, the longest the task form
+  allows; TrueNAS has no "never expire"). Helper snapshots are manual
+  snapshots and never expire. A retention task only prunes names matching its
+  own schema, so neither set is touched by other tasks.
+- Ownership: the dataset is owned by the app uid:gid (568:568) like the other
+  custom apps. `secrets/` is 0700 and its env files 0600, also 568:568
+  (amber's convention: Docker reads `env_file` as root, so this only lets the
+  app read its own secrets). The browser sidecar's `custom-cont-init.d`
+  scripts stay root-owned because the linuxserver image skips init scripts
+  not owned by root.
 - Layout under `<DATA_DIR>/backup/`: `activities/<id>/` holds content-addressed
   `metadata/`, `kudos/`, `comments/`, `web-form/` (edit-form values only,
   never tokens) and `photos/` files, plus `streams.json` and

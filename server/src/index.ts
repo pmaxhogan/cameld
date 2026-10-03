@@ -99,7 +99,10 @@ async function main(): Promise<void> {
     const snapshotter =
       config.snapshotHelperUrl === undefined
         ? new UnavailableSnapshotter()
-        : new HttpSnapshotter({ url: config.snapshotHelperUrl });
+        : new HttpSnapshotter({
+            url: config.snapshotHelperUrl,
+            token: config.snapshotHelperToken,
+          });
     const machine = new MergeMachine({
       db,
       api,

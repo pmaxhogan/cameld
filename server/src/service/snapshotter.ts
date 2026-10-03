@@ -1,9 +1,10 @@
 /**
  * ZFS snapshots of the backup dataset (ARCHITECTURE.md section 7). The
  * service never holds a privileged container or the Docker socket; it asks a
- * tiny host-side helper at SNAPSHOT_HELPER_URL:
+ * tiny host-side helper (deploy/snapshot-helper/) at SNAPSHOT_HELPER_URL:
  *
  *   POST <SNAPSHOT_HELPER_URL>/snapshot
+ *   authorization: Bearer <SNAPSHOT_HELPER_TOKEN>
  *   content-type: application/json
  *   {"label": "<a-z 0-9 - _, at most 64 chars>"}
  *
@@ -32,6 +33,8 @@ export function assertLabel(label: string): void {
 
 export interface HttpSnapshotterOptions {
   url: string;
+  /** Sent as a bearer token. The helper refuses requests without it. */
+  token?: string | undefined;
   fetch?: typeof fetch;
   /** Default 60000: a snapshot of a large dataset is still quick, but not instant. */
   timeoutMs?: number;
@@ -39,22 +42,29 @@ export interface HttpSnapshotterOptions {
 
 export class HttpSnapshotter implements Snapshotter {
   readonly #url: string;
+  readonly #token: string | undefined;
   readonly #fetch: typeof fetch;
   readonly #timeoutMs: number;
 
   constructor(options: HttpSnapshotterOptions) {
     this.#url = `${options.url.replace(/\/+$/, "")}/snapshot`;
+    this.#token = options.token;
     this.#fetch = options.fetch ?? fetch;
     this.#timeoutMs = options.timeoutMs ?? 60_000;
   }
 
   async snapshot(label: string): Promise<string> {
     assertLabel(label);
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      accept: "application/json",
+    };
+    if (this.#token !== undefined) headers.authorization = `Bearer ${this.#token}`;
     let response: Response;
     try {
       response = await this.#fetch(this.#url, {
         method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json" },
+        headers,
         body: JSON.stringify({ label }),
         signal: AbortSignal.timeout(this.#timeoutMs),
       });
