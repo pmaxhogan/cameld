@@ -7,3 +7,8 @@ export { ActivityReadError } from "./readers/xml.ts";
 export * from "./readers/gpx.ts";
 export * from "./readers/tcx.ts";
 export * from "./metadata/merge.ts";
+export * from "./match/source.ts";
+export * from "./match/settings.ts";
+export * from "./match/geo.ts";
+export * from "./match/align.ts";
+export * from "./match/matcher.ts";

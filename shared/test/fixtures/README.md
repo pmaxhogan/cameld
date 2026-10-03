@@ -11,6 +11,12 @@ place a person frequents. The data is generated in code on every test run.
   time is an arbitrary fixed instant (2020-02-02T02:02:02Z).
 - `xml.ts` serializes generated samples as GPX 1.1 and TCX v2 text for the
   reader tests.
+- `pair-generator.ts` simulates one fictional outing recorded twice (an
+  "app" copy and a "fitbit" copy) on a 400 m circle around the same lat 0.5,
+  lng 0.5 origin. Formulas plus seeded noise; the knobs are clock lag, early
+  and late starts, app GPS gaps, sub-second duplicate records, missing Fitbit
+  fixes, Fitbit noise and position spikes. `syntheticPairOptionsArb` draws
+  those knobs at random for the merge property tests.
 - `arbitraries.ts` holds fast-check arbitraries that draw samples from the
   full range the FIT writer accepts (any latitude and longitude, extreme
   altitudes and speeds), which is deliberately unlike any real outing.
