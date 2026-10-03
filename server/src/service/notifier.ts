@@ -1,9 +1,10 @@
 import type { Logger } from "../logging.ts";
 
 /**
- * Owner notifications. Web Push arrives with the UI; until then the default
- * implementation writes a structured log line (Loki alerts on it). Sending a
- * notification must never break the flow that raised it: use `notifySafely`.
+ * Owner notifications. Every notification is written as a structured log line
+ * (Loki alerts on it) and, when VAPID keys are configured, sent as Web Push
+ * (service/push.ts). Sending a notification must never break the flow that
+ * raised it: use `notifySafely`.
  */
 
 export type NotificationLevel = "info" | "warning" | "critical";
@@ -18,7 +19,11 @@ export type NotificationKind =
   | "deletion_unconfirmed"
   | "restore_flagged"
   | "photos_flagged"
-  | "backup_failed";
+  | "backup_failed"
+  | "merge_failed"
+  | "backfill_batch"
+  | "trial_done"
+  | "test";
 
 export interface Notification {
   kind: NotificationKind;

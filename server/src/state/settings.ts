@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
+  type ApiSettings,
+  BACKFILL_MODES,
+  type BackfillMode,
   DEFAULT_MATCH_SETTINGS,
   DEFAULT_MERGE_SETTINGS,
   type MatchSettings,
@@ -17,9 +20,9 @@ import type { Logger } from "../logging.ts";
  * Switches: upload and hide default ON, delete OFF. No Strava write happens
  * while writes are frozen whatever the switches say (state/freeze.ts).
  *
- * There is deliberately no HTTP route that writes settings yet: the server
- * has no authentication until the UI wave, and an open route could turn
- * deletion on. The UI will call `update()` behind auth.
+ * The UI writes settings through PATCH /api/settings, behind both auth gates;
+ * turning deletion (or the deletion trial) on there also needs the owner's
+ * typed confirmation (ui/routes.ts).
  */
 
 const HOUR = 60 * 60 * 1000;
@@ -97,12 +100,13 @@ const trialSchema = z
   .object({ enabled: z.boolean(), maxPairs: z.number().int().min(0).max(MAX_TRIAL_PAIRS) })
   .strict();
 
-export const BACKFILL_MODES = ["off", "backup_only", "dry_run", "live"] as const;
-export type BackfillMode = (typeof BACKFILL_MODES)[number];
+export { BACKFILL_MODES, type BackfillMode };
 
 const backfillSchema = z
   .object({
     mode: z.enum(BACKFILL_MODES),
+    /** Owner pause: the batch stops between activities without changing the mode. */
+    paused: z.boolean(),
     /** Reads per UTC day the backfill may spend (leaves headroom for another consumer). */
     dailyReads: z.number().int().min(0),
     /** Reads per 15-minute window the backfill may spend. */
@@ -149,8 +153,8 @@ export const DEFAULT_SETTINGS: Settings = {
   postUpload: { tolerance: 0.05, startToleranceSeconds: 2 },
   switches: { hide: true, delete: false, upload: true },
   trial: { enabled: false, maxPairs: MAX_TRIAL_PAIRS },
-  backfill: { mode: "off", dailyReads: 600, fifteenMinuteReads: 70, pageSize: 30 },
-};
+  backfill: { mode: "off", paused: false, dailyReads: 600, fifteenMinuteReads: 70, pageSize: 30 },
+} satisfies ApiSettings;
 
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends object ? (T[K] extends unknown[] ? T[K] : DeepPartial<T[K]>) : T[K];

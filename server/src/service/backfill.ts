@@ -54,7 +54,7 @@ export interface BackfillOptions {
 
 export interface BatchResult {
   mode: BackfillMode;
-  stopped: "off" | "budget" | "done" | "error" | "running";
+  stopped: "off" | "paused" | "budget" | "done" | "error" | "running";
   activities: number;
   groups: number;
   error: string | null;
@@ -67,10 +67,26 @@ export interface DryRunEntry {
   report: unknown;
 }
 
+/** Every dry-run report entry, newest first. Read-only; needs no Strava connection. */
+export function dryRunEntries(db: DatabaseSync): DryRunEntry[] {
+  const rows = db
+    .prepare(
+      "SELECT group_key, start_ms, decision, report FROM dry_run_report ORDER BY start_ms DESC",
+    )
+    .all() as { group_key: string; start_ms: number; decision: string; report: string }[];
+  return rows.map((row) => ({
+    groupKey: row.group_key,
+    startMs: row.start_ms,
+    decision: row.decision,
+    report: JSON.parse(row.report) as unknown,
+  }));
+}
+
 export class Backfill {
   readonly #o: BackfillOptions;
   readonly #log: Logger | undefined;
   #running = false;
+  #last: (BatchResult & { finishedAt: number }) | null = null;
 
   constructor(options: BackfillOptions) {
     this.#o = options;
@@ -100,6 +116,16 @@ export class Backfill {
       .run(cursorMs, done ? 1 : 0, added, this.#o.clock.now(), added);
   }
 
+  /** True while a batch is in progress. */
+  running(): boolean {
+    return this.#running;
+  }
+
+  /** The most recent finished batch since the process started. */
+  lastBatch(): (BatchResult & { finishedAt: number }) | null {
+    return this.#last;
+  }
+
   /** Start over from the newest activity (for example after switching mode). */
   reset(): void {
     this.#o.db.prepare("DELETE FROM backfill_state").run();
@@ -111,6 +137,7 @@ export class Backfill {
     const mode = settings.mode;
     const result: BatchResult = { mode, stopped: "off", activities: 0, groups: 0, error: null };
     if (mode === "off") return result;
+    if (settings.paused) return { ...result, stopped: "paused" };
     if (this.#running) return { ...result, stopped: "running" };
     this.#running = true;
     const { db, api, backup, budget, clock } = this.#o;
@@ -136,6 +163,7 @@ export class Backfill {
         let oldest = cursor;
         let newest = 0;
         for (const activity of fresh) {
+          if (this.#o.settings.get().backfill.paused) break;
           upsertActivity(db, activity, clock.now());
           try {
             await backup.backupActivity(activity.id, { gate: budget });
@@ -152,7 +180,13 @@ export class Backfill {
           this.#save(oldest, false, 1);
           result.activities += 1;
         }
-        result.groups += await this.#afterPage(mode, oldest - DAY_MS, newest + DAY_MS);
+        if (newest > 0) {
+          result.groups += await this.#afterPage(mode, oldest - DAY_MS, newest + DAY_MS);
+        }
+        if (this.#o.settings.get().backfill.paused) {
+          result.stopped = "paused";
+          break;
+        }
       }
     } catch (error) {
       if (error instanceof BudgetExhaustedError) {
@@ -167,6 +201,7 @@ export class Backfill {
     }
     if (mode === "dry_run") await this.writeReport();
     this.#log?.info({ ...result }, "backfill batch finished");
+    this.#last = { ...result, finishedAt: clock.now() };
     return result;
   }
 
@@ -245,20 +280,10 @@ export class Backfill {
   }
 
   report(): { generatedAt: number; progress: BackfillProgress; groups: DryRunEntry[] } {
-    const rows = this.#o.db
-      .prepare(
-        "SELECT group_key, start_ms, decision, report FROM dry_run_report ORDER BY start_ms DESC",
-      )
-      .all() as { group_key: string; start_ms: number; decision: string; report: string }[];
     return {
       generatedAt: this.#o.clock.now(),
       progress: this.progress(),
-      groups: rows.map((row) => ({
-        groupKey: row.group_key,
-        startMs: row.start_ms,
-        decision: row.decision,
-        report: JSON.parse(row.report) as unknown,
-      })),
+      groups: dryRunEntries(this.#o.db),
     };
   }
 

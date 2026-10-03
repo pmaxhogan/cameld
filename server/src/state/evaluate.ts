@@ -61,10 +61,10 @@ export function groupIdFor(startMs: number, ids: readonly number[]): string {
 /** Original samples per activity, parsed once per instance. */
 export class SampleCache {
   readonly #db: DatabaseSync;
-  readonly #backup: BackupService;
+  readonly #backup: Pick<BackupService, "readOriginal">;
   readonly #cache = new Map<number, ActivitySample[]>();
 
-  constructor(db: DatabaseSync, backup: BackupService) {
+  constructor(db: DatabaseSync, backup: Pick<BackupService, "readOriginal">) {
     this.#db = db;
     this.#backup = backup;
   }

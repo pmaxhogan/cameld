@@ -76,6 +76,7 @@ import {
   withTransaction,
   writesFor,
 } from "./repo.ts";
+import { approveReview, rejectReview } from "./review.ts";
 import { matchSettingsOf, type SettingsStore } from "./settings.ts";
 
 /**
@@ -159,6 +160,47 @@ interface Step {
   event: string;
   evidence?: unknown;
   patch?: GroupPatch;
+}
+
+/** A manual restore was asked for a group whose status does not allow it. */
+export class NotRestorableError extends Error {
+  override readonly name = "NotRestorableError";
+}
+
+/** Statuses a manual restore may start from: something was written, nothing is mid-step. */
+export const RESTORABLE_STATUSES: readonly GroupStatus[] = [
+  "uploaded",
+  "metadata_applied",
+  "verified",
+  "hidden",
+  "awaiting_deletion",
+  "a_deleting",
+  "a_confirming",
+  "b_rejected",
+  "b_delete_fitbit",
+  "b_retry_1",
+  "b_delete_app",
+  "b_retry_2",
+  "parked",
+  "done",
+  "failed",
+  "restore_flagged",
+];
+
+export function isRestorable(group: GroupRow): boolean {
+  if (!RESTORABLE_STATUSES.includes(group.status)) return false;
+  if (group.status === "parked") {
+    return group.hiddenAt !== null || group.deletedIds.length > 0 || group.uploadId !== null;
+  }
+  return true;
+}
+
+export interface GroupRestoreResult {
+  groupId: string;
+  status: GroupStatus;
+  restored: { id: number; outcome: string; newId: number | null; flags: string[] }[];
+  unhidden: number[];
+  flags: string[];
 }
 
 export type RestoreOutcome =
@@ -249,6 +291,8 @@ export class MergeMachine {
   readonly #poll: PollOptions;
   readonly #noLoss: NoLossCheck;
   readonly #samples: SampleCache;
+  /** Serializes tick() and owner actions that write to Strava. */
+  #lock: Promise<unknown> = Promise.resolve();
 
   constructor(options: MachineOptions) {
     this.#db = options.db;
@@ -269,6 +313,13 @@ export class MergeMachine {
 
   #now(): number {
     return this.#clock.now();
+  }
+
+  /** Run `fn` after every earlier exclusive run has finished. */
+  #exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.#lock.then(fn, fn);
+    this.#lock = run.catch(() => undefined);
+    return run;
   }
 
   async #notify(
@@ -369,13 +420,15 @@ export class MergeMachine {
   // Driving
 
   /** Reconcile open intents, resume parked groups, then advance every live group. */
-  async tick(): Promise<void> {
-    this.#samples.clear();
-    await this.reconcile();
-    await this.#resumeParked();
-    for (const group of listGroups(this.#db)) {
-      if (!TERMINAL_STATUSES.includes(group.status)) await this.advance(group.id);
-    }
+  tick(): Promise<void> {
+    return this.#exclusive(async () => {
+      this.#samples.clear();
+      await this.reconcile();
+      await this.#resumeParked();
+      for (const group of listGroups(this.#db)) {
+        if (!TERMINAL_STATUSES.includes(group.status)) await this.advance(group.id);
+      }
+    });
   }
 
   async advance(groupId: string): Promise<GroupStatus> {
@@ -433,6 +486,34 @@ export class MergeMachine {
       await this.#notify("review", "info", "A pair needs review", group.id, group.id);
     } else if (step.to === "done") {
       await this.#notify("merged", "info", "A pair was merged", group.id, group.id);
+      await this.#notifyTrialDone(group.id);
+    } else if (step.to === "failed") {
+      await this.#notify(
+        "merge_failed",
+        "critical",
+        "A merge failed",
+        `${group.id}: ${step.event}`,
+        group.id,
+      );
+    }
+  }
+
+  /** The deletion trial is over once its last pair is done. */
+  async #notifyTrialDone(groupId: string): Promise<void> {
+    if (!requireGroup(this.#db, groupId).trial) return;
+    const used = trialPairsUsed(this.#db);
+    const max = this.#settings.get().trial.maxPairs;
+    const open = listGroups(this.#db).filter(
+      (g) => g.trial && !TERMINAL_STATUSES.includes(g.status),
+    ).length;
+    if (used >= max && open === 0) {
+      await this.#notify(
+        "trial_done",
+        "info",
+        "The deletion trial is complete",
+        `${String(used)} trial pairs merged and deleted. Deletion stays off until you turn it on.`,
+        groupId,
+      );
     }
   }
 
@@ -514,23 +595,11 @@ export class MergeMachine {
   // Owner actions (wired to the authenticated UI later)
 
   approveReview(groupId: string, offsetSeconds = 0): void {
-    const group = requireGroup(this.#db, groupId);
-    if (group.status !== "review") throw new Error(`group ${groupId} is not in review`);
-    // Three sources (or none) have no app/wrist roles: the owner can only reject.
-    if ((group.match as { appIds: number[] }).appIds.length === 0) {
-      throw new Error(`group ${groupId} has no two-sided structure to merge`);
-    }
-    const now = this.#now();
-    patchGroup(this.#db, groupId, { status: "scored", offsetSeconds }, now);
-    appendEvent(this.#db, groupId, now, "review", "scored", "review_approved", { offsetSeconds });
+    approveReview(this.#db, groupId, this.#now(), offsetSeconds);
   }
 
   rejectReview(groupId: string): void {
-    const group = requireGroup(this.#db, groupId);
-    if (group.status !== "review") throw new Error(`group ${groupId} is not in review`);
-    const now = this.#now();
-    patchGroup(this.#db, groupId, { status: "dissolved" }, now);
-    appendEvent(this.#db, groupId, now, "review", "dissolved", "review_rejected", null);
+    rejectReview(this.#db, groupId, this.#now());
   }
 
   // -------------------------------------------------------------------------
@@ -1349,6 +1418,76 @@ export class MergeMachine {
       });
     }
     return flags;
+  }
+
+  /**
+   * Owner action: undo a merge as far as Strava allows. Deleted originals are
+   * re-uploaded from their backed-up files (restoreActivity) and hidden ones
+   * get back the visibility they had before cameld hid them. The merged
+   * activity is left alone (deleting it is the owner's call). The group ends
+   * in "restored". Allowed while frozen: restore is the one exception.
+   */
+  restoreGroup(groupId: string, reason: string): Promise<GroupRestoreResult> {
+    return this.#exclusive(async () => {
+      const group = requireGroup(this.#db, groupId);
+      if (!isRestorable(group)) {
+        throw new NotRestorableError(`group ${groupId} cannot be restored from ${group.status}`);
+      }
+      const restored: GroupRestoreResult["restored"] = [];
+      const unhidden: number[] = [];
+      const flags: string[] = [];
+      for (const id of this.#members(group)) {
+        const activity = requireActivity(this.#db, id);
+        if (group.deletedIds.includes(id) || activity.goneAt !== null) {
+          const outcome = await this.restoreActivity(id, group.id);
+          restored.push(
+            outcome.status === "restored"
+              ? { id, outcome: outcome.status, newId: outcome.newId, flags: outcome.flags }
+              : { id, outcome: outcome.status, newId: null, flags: [outcome.reason] },
+          );
+        } else if (group.hiddenAt !== null) {
+          const flag = await this.#unhide(group, id);
+          if (flag === null) unhidden.push(id);
+          else flags.push(flag);
+        }
+      }
+      const evidence = { reason, restored, unhidden, flags, merged: group.mergedActivityId };
+      await this.#transition(group, { to: "restored", event: "restored_by_owner", evidence });
+      if (restored.some((r) => r.outcome === "flagged") || flags.length > 0) {
+        await this.#notify(
+          "restore_flagged",
+          "warning",
+          "A restore needs attention",
+          `${group.id}: some originals could not be fully restored`,
+          group.id,
+        );
+      }
+      return { groupId, status: "restored" as const, restored, unhidden, flags };
+    });
+  }
+
+  /** Give a hidden original back its pre-hide visibility. Returns a flag, or null when done. */
+  async #unhide(group: GroupRow, id: number): Promise<string | null> {
+    const form = await this.#backup.latestJson<EditFormValues>(
+      id,
+      "web_form",
+      group.hiddenAt as number,
+    );
+    const visibility = form?.visibility ?? null;
+    if (visibility === null) return `${String(id)}: no visibility in the backup`;
+    const writeId = beginWrite(
+      this.#db,
+      { groupId: group.id, kind: "restore_web", targetId: id },
+      this.#now(),
+    );
+    try {
+      await this.#web.run((s) => s.setVisibility(id, visibility));
+      finishWrite(this.#db, writeId, "done", { visibility }, this.#now());
+      return null;
+    } catch (error) {
+      finishWrite(this.#db, writeId, "failed", { error: message(error) }, this.#now());
+      return `${String(id)}: ${message(error)}`;
+    }
   }
 
   // -------------------------------------------------------------------------

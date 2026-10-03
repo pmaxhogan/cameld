@@ -1,5 +1,7 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { buildApp } from "./app.ts";
+import { createGate } from "./auth/gate.ts";
+import { VncProxy } from "./browser/proxy.ts";
 import { ConfigError, loadConfig } from "./config.ts";
 import { migrate, openDatabase } from "./db.ts";
 import { createBootLogger, createLogger } from "./logging.ts";
@@ -8,7 +10,8 @@ import { Backfill } from "./service/backfill.ts";
 import { BackupService } from "./service/backup.ts";
 import { ReadBudget } from "./service/budget.ts";
 import { Metrics } from "./service/metrics.ts";
-import { LogNotifier } from "./service/notifier.ts";
+import { LogNotifier, notifySafely } from "./service/notifier.ts";
+import { MultiNotifier, PushNotifier, PushService } from "./service/push.ts";
 import { Poller } from "./service/poller.ts";
 import { HttpSnapshotter, UnavailableSnapshotter } from "./service/snapshotter.ts";
 import { WebGate } from "./service/web-gate.ts";
@@ -19,6 +22,7 @@ import { SettingsStore } from "./state/settings.ts";
 import { StravaClient } from "./strava/client.ts";
 import { RateLimiter, systemClock } from "./strava/rate-limiter.ts";
 import { SqliteTokenStore, TokenManager } from "./strava/tokens.ts";
+import { registerUiRoutes } from "./ui/routes.ts";
 import { WebSession } from "./web/session.ts";
 
 const BACKFILL_INTERVAL_MS = 15 * 60 * 1000;
@@ -34,7 +38,17 @@ async function main(): Promise<void> {
   log.info({ mod: "migrate", applied }, "migrations up to date");
 
   const clock = systemClock;
-  const notifier = new LogNotifier(log);
+  const { vapidPublicKey, vapidPrivateKey, vapidSubject } = config.push;
+  const push = new PushService({
+    db,
+    vapid:
+      vapidPublicKey !== undefined && vapidPrivateKey !== undefined && vapidSubject !== undefined
+        ? { publicKey: vapidPublicKey, privateKey: vapidPrivateKey, subject: vapidSubject }
+        : null,
+    log,
+  });
+  if (!push.configured()) log.warn("VAPID keys missing; Web Push is off");
+  const notifier = new MultiNotifier([new LogNotifier(log), new PushNotifier(push)]);
   const settings = new SettingsStore(db, { log });
   const freeze = new FreezeStore(db, { notifier, log });
   const limiter = new RateLimiter({
@@ -77,6 +91,8 @@ async function main(): Promise<void> {
     (tokenStore.load() !== null || initialRefreshToken !== undefined);
 
   let poller: Poller | null = null;
+  let machine: MergeMachine | null = null;
+  let runBackfill: (() => void) | undefined;
   let backfillTimer: NodeJS.Timeout | undefined;
   if (authorized) {
     const tokens = new TokenManager({
@@ -103,7 +119,7 @@ async function main(): Promise<void> {
             url: config.snapshotHelperUrl,
             token: config.snapshotHelperToken,
           });
-    const machine = new MergeMachine({
+    machine = new MergeMachine({
       db,
       api,
       web,
@@ -129,9 +145,23 @@ async function main(): Promise<void> {
     });
     poller = new Poller({ db, api, backup, machine, web, settings, clock, limiter, metrics, log });
     poller.start();
-    const runBackfill = (): void => {
+    runBackfill = (): void => {
       void backfill
         ?.runBatch()
+        .then(async (result) => {
+          if (result.activities > 0 || result.stopped === "done") {
+            await notifySafely(
+              notifier,
+              {
+                kind: "backfill_batch",
+                level: result.stopped === "error" ? "warning" : "info",
+                title: "Backfill batch finished",
+                body: `${String(result.activities)} activities, ${String(result.groups)} groups (${result.mode}, stopped: ${result.stopped})`,
+              },
+              log,
+            );
+          }
+        })
         .catch((error: unknown) => log.error({ err: error }, "backfill failed"));
     };
     runBackfill();
@@ -140,19 +170,50 @@ async function main(): Promise<void> {
     log.warn("strava credentials or tokens missing; polling and backfill are not started");
   }
 
+  let browser: VncProxy | undefined;
+  if (config.browser.vncUrl !== undefined) {
+    try {
+      browser = new VncProxy({
+        upstream: config.browser.vncUrl,
+        user: config.browser.vncUser,
+        password: config.browser.vncPassword,
+        ca:
+          config.browser.vncCaFile === undefined
+            ? undefined
+            : readFileSync(config.browser.vncCaFile, "utf8"),
+        certSha256: config.browser.vncCertSha256,
+        log,
+      });
+    } catch (error) {
+      log.error({ err: error }, "browser VNC proxy not started; the Strava login panel is off");
+    }
+  }
+
   const app = await buildApp({
     config,
     log,
     metrics,
-    data: {
-      backfillReport: () => backfill?.report() ?? null,
-      status: () => ({
-        frozen: freeze.state(),
-        web: web.status(),
-        backfill: backfill?.progress() ?? null,
-        polling: poller !== null,
+    gate: createGate(config.auth, { log }),
+    ...(browser === undefined ? {} : { browser }),
+    api: (api) =>
+      registerUiRoutes(api, {
+        db,
+        version: config.version,
+        mapStyleUrl: config.mapStyleUrl,
+        backupRoot: `${config.dataDir}/backup`,
+        settings,
+        freeze,
+        web,
+        push,
+        budget,
+        limiter,
+        machine,
+        backfill,
+        runBackfill,
+        browserAvailable: browser !== undefined,
+        polling: () => poller !== null,
+        log,
       }),
-    },
   });
 
   let stopping = false;

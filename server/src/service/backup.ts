@@ -127,6 +127,33 @@ const defaultFetchPhoto: FetchPhoto = async (url) => {
   };
 };
 
+/** Read a backup file after checking it against its checksum sidecar. */
+export async function readVerifiedFile(root: string, relPath: string): Promise<Buffer> {
+  const path = join(root, relPath);
+  const check = await verify(path);
+  if (!check.ok) throw new BackupIntegrityError(`${relPath} failed verification: ${check.reason}`);
+  return readFile(path);
+}
+
+/**
+ * The backed-up original file of an activity, verified, or null when there is
+ * none. Read-only: usable without a Strava connection (the UI's track view).
+ */
+export async function readStoredOriginal(
+  db: DatabaseSync,
+  root: string,
+  activityId: number,
+): Promise<StoredOriginal | null> {
+  const activity = requireActivity(db, activityId);
+  if (activity.originalStatus !== "present" || activity.originalPath === null) return null;
+  const bytes = await readVerifiedFile(root, activity.originalPath);
+  return {
+    bytes,
+    dataType: activity.originalFormat as UploadDataType,
+    filename: activity.originalPath.split("/").pop() as string,
+  };
+}
+
 export class BackupService {
   readonly #db: DatabaseSync;
   readonly #api: BackupApi;
@@ -187,33 +214,27 @@ export class BackupService {
   }
 
   async readVerified(relPath: string): Promise<Buffer> {
-    const path = join(this.#root, relPath);
-    const check = await verify(path);
-    if (!check.ok)
-      throw new BackupIntegrityError(`${relPath} failed verification: ${check.reason}`);
-    return readFile(path);
+    return readVerifiedFile(this.#root, relPath);
   }
 
-  /** Latest stored JSON of a kind for an activity (by insertion order), or null. */
-  async latestJson<T>(activityId: number, kind: string): Promise<T | null> {
+  /**
+   * Latest stored JSON of a kind for an activity (by insertion order), or
+   * null. With `beforeMs`, only copies stored before that instant count (for
+   * example the visibility an activity had before cameld hid it).
+   */
+  async latestJson<T>(activityId: number, kind: string, beforeMs?: number): Promise<T | null> {
     const row = this.#db
       .prepare(
-        "SELECT rel_path FROM backup_files WHERE activity_id = ? AND kind = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        "SELECT rel_path FROM backup_files WHERE activity_id = ? AND kind = ? AND created_at < ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
       )
-      .get(activityId, kind) as { rel_path: string } | undefined;
+      .get(activityId, kind, beforeMs ?? Number.MAX_SAFE_INTEGER) as
+      { rel_path: string } | undefined;
     if (row === undefined) return null;
     return JSON.parse((await this.readVerified(row.rel_path)).toString("utf8")) as T;
   }
 
   async readOriginal(activityId: number): Promise<StoredOriginal | null> {
-    const activity = requireActivity(this.#db, activityId);
-    if (activity.originalStatus !== "present" || activity.originalPath === null) return null;
-    const bytes = await this.readVerified(activity.originalPath);
-    return {
-      bytes,
-      dataType: activity.originalFormat as UploadDataType,
-      filename: activity.originalPath.split("/").pop() as string,
-    };
+    return readStoredOriginal(this.#db, this.#root, activityId);
   }
 
   /** Photo files of an activity: [relPath, unique id]. */

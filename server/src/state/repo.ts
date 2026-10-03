@@ -187,6 +187,7 @@ export const GROUP_STATUSES = [
   "done",
   "failed",
   "restore_flagged",
+  "restored",
   "dissolved",
   "superseded",
 ] as const;
@@ -196,6 +197,7 @@ export const TERMINAL_STATUSES: readonly GroupStatus[] = [
   "done",
   "failed",
   "restore_flagged",
+  "restored",
   "dissolved",
   "superseded",
 ];
