@@ -12,3 +12,6 @@ export * from "./match/settings.ts";
 export * from "./match/geo.ts";
 export * from "./match/align.ts";
 export * from "./match/matcher.ts";
+export * from "./merge/ledger.ts";
+export * from "./merge/merger.ts";
+export * from "./merge/no-loss.ts";

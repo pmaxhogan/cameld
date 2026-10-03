@@ -81,3 +81,20 @@ is the whole specification. Do not look for the underlying data.
   terrain model for others (it replaced the app's). Whatever ends up on
   Strava, the merged FIT carries the app's elevation and the backup keeps
   both.
+
+## Implementation choices where the rules are silent
+
+Recorded so the code and this file agree (shared/src/match, shared/src/merge).
+
+- Sharp clock minimum, offset <= 15 s, residual > 2 m and a non-zero best
+  offset: parked for review as "uncertain" (L11), offset 0 not applied.
+- Distance and speed follow the app, like elevation: cumulative distance from
+  two devices cannot be mixed. A field the preferred side never carries is
+  taken from the other side (for example altitude from the Fitbit when the
+  other device records none). Unused values go to the exclusion ledger.
+- The speed filter accepts the 30th consecutive would-be drop as the new
+  anchor (29 are dropped). An app fix in between restarts the count. Sports
+  outside walk, hike, run and ride are not filtered by default.
+- Groups with three sources, splits on both sides, or overlapping parts on
+  one side go to review. A pair where only one side has GPS is judged by the
+  non-GPS rule.
