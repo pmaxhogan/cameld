@@ -49,6 +49,9 @@ export default defineConfig({
         // Process entrypoints: exercised by the e2e suite and the image smoke test.
         "server/src/index.ts",
         "web/src/main.ts",
+        // Runs inside the browser via page.evaluate, so v8 never sees it execute in
+        // Node. The web-session integration tests drive it in a real Chromium.
+        "server/src/web/in-page.ts",
       ],
     },
   },

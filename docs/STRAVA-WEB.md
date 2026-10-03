@@ -62,3 +62,61 @@ Delete notes:
   attaches it. Captions: `PUT /media/<type>/<id>/add_caption`.
 - Unverified until the first real upload: the presigned upload host, and
   photo removal.
+
+## Implementation (server/src/web/)
+
+`WebSession` (`session.ts`) implements the `StravaWebSession` interface over
+`connectOverCDP(BROWSER_CDP_URL)`. Every operation opens a new page in
+`contexts()[0]`, closes only that page (bounded, even on timeout), and runs
+strictly one at a time. `disconnect()` drops the CDP connection only; on a
+CDP-connected browser `Browser.close()` leaves the process, its tabs and its
+cookies alive (an integration test checks this).
+
+- Requests are in-page `fetch` calls with credentials (`in-page.ts`, the only
+  code that runs in the browser) to URLs built from a validated numeric id.
+- Edits read the whole form as `FormData` entries, change only the target
+  field(s), POST everything back with `_method=patch` and the form's
+  `authenticity_token` (plus `X-CSRF-Token`), then re-read the form and throw
+  `WebVerificationError` if a changed field did not stick or any other field
+  moved.
+- Expiry (redirect to `/login`, 401) throws `LoginRequiredError`; captcha or
+  verification pages, 403 and 429 throw `ChallengeError` (`kind`). Nothing is
+  retried. `login()` tries once; after a failure it refuses until a health
+  check sees a live session again.
+
+### DeletionAuthorization
+
+`deleteActivity(id, auth)` requires a `DeletionAuthorization`
+(`deletion-authorization.ts`). Only the merge state machine
+(`server/src/state/`) may mint one, via `DeletionAuthorization.mint(evidence)`:
+
+- the constructor is private, and ESLint (`no-restricted-syntax`) rejects the
+  `mint` call anywhere except `server/src/state/**` and tests;
+- the evidence demands `deletionSwitch: "on"`, `originalFileBackedUp: true`,
+  a ZFS snapshot name and a backup verified within the last 15 minutes, all
+  re-checked at runtime;
+- the token is branded with an ECMAScript private field (look-alike objects
+  and casts are refused), names exactly one activity, expires after 15
+  minutes, and is spent before the delete request is sent, even if that
+  request then fails.
+
+The delete is `POST /activities/<id>` with `_method=delete`, then
+`GET /activities/<id>` must answer 404 or redirect elsewhere, else
+`DeletionNotConfirmedError`.
+
+### Unverified until the first live session
+
+- The athlete-menu selector used for "logged in" (`athleteMenuSelector`).
+- The login page selectors and submitting each step with Enter.
+- Photo upload: the `/photos/metadata` body (`media_type: 1`,
+  `location: null`), the presigned upload host and headers, and whether the
+  edit form lists the new photo afterwards (reported as `verified`).
+
+### Tests
+
+`server/test/fake-strava/` is a synthetic, Rails-like fake of these pages. It
+resets any field missing from a PATCH, carries a `data-method=delete` Log Out
+link on every page, and has modes for expiry, captcha, 403, 429, refused
+`request_otp`, slow pages and failed saves. The integration tests spawn a real
+Chromium with `--remote-debugging-port` and connect over CDP, like the
+sidecar. CI installs it with `npx playwright install --with-deps chromium`.

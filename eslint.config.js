@@ -51,6 +51,23 @@ export default tseslint.config(
     },
   },
   {
+    // DeletionAuthorization.mint is the state machine's alone (see
+    // server/src/web/deletion-authorization.ts). Minting anywhere else is a lint error.
+    files: ["**/*.{ts,js,vue}"],
+    ignores: ["server/src/state/**", "server/test/**"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "CallExpression[callee.property.name='mint'][callee.object.name='DeletionAuthorization']",
+          message:
+            "Only the merge state machine (server/src/state/) may mint a DeletionAuthorization.",
+        },
+      ],
+    },
+  },
+  {
     // Vue SFCs need vue-eslint-parser with the TS parser for <script lang="ts">.
     files: ["**/*.vue"],
     languageOptions: {

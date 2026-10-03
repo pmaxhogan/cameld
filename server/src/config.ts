@@ -57,6 +57,12 @@ export const envSchema = z.object({
   /** Email-code relay Worker (relay/). Origin only, no trailing path. */
   RELAY_URL: z.preprocess(blankAsUnset, z.string().url().optional()),
   RELAY_TOKEN: optionalString,
+
+  /**
+   * DevTools endpoint of the cameld-browser sidecar (a real Chrome with a
+   * persistent, logged-in strava.com profile), e.g. http://cameld-browser:9222.
+   */
+  BROWSER_CDP_URL: z.preprocess(blankAsUnset, z.string().url().optional()),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -96,6 +102,9 @@ export interface Config {
   relay: {
     url: string | undefined;
     token: string | undefined;
+  };
+  browser: {
+    cdpUrl: string | undefined;
   };
 }
 
@@ -156,6 +165,9 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     relay: {
       url: env.RELAY_URL?.replace(/\/+$/, ""),
       token: env.RELAY_TOKEN,
+    },
+    browser: {
+      cdpUrl: env.BROWSER_CDP_URL,
     },
   };
 }

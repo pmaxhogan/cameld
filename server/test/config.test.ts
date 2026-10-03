@@ -64,4 +64,12 @@ describe("loadConfig", () => {
     expect(loadConfig({ RELAY_URL: "" }).relay.url).toBeUndefined();
     expect(() => loadConfig({ RELAY_URL: "not a url" })).toThrow(ConfigError);
   });
+
+  it("reads the browser CDP endpoint", () => {
+    expect(loadConfig({ BROWSER_CDP_URL: "http://browser.example.test:9222" }).browser).toEqual({
+      cdpUrl: "http://browser.example.test:9222",
+    });
+    expect(loadConfig({ BROWSER_CDP_URL: "" }).browser.cdpUrl).toBeUndefined();
+    expect(() => loadConfig({ BROWSER_CDP_URL: "nope" })).toThrow(ConfigError);
+  });
 });
