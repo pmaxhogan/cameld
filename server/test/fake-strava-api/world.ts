@@ -97,6 +97,14 @@ export class FakeWorld {
   /** Hook called before every API request is handled (for intent-ordering assertions). */
   onRequest: ((method: string, path: string) => void) | undefined;
   readonly requests: { method: string; path: string }[] = [];
+  /** Answer a request with this HTTP status instead (null = handle normally). */
+  failStatus: ((method: string, path: string) => number | null) | undefined;
+  /** Another fake (the strava.com web pages) may delete activities too. */
+  goneElsewhere: ((id: number) => boolean) | undefined;
+  /** Called for every activity an upload creates. */
+  onCreated: ((activity: WorldActivity) => void) | undefined;
+  /** Replace the streams answer for an activity (tolerance tests). */
+  streamsOverride: ((id: number) => unknown) | undefined;
 
   /** The live rule: same external id, or overlapping time; names the app copy first. */
   defaultDuplicate(incoming: {
@@ -104,7 +112,7 @@ export class FakeWorld {
     endMs: number;
     externalId: string;
   }): number | null {
-    const live = [...this.activities.values()].filter((a) => a.exists);
+    const live = this.live();
     const same = live.find((a) => a.externalId === incoming.externalId);
     if (same !== undefined) return same.id;
     const overlapping = live.filter(
@@ -147,11 +155,11 @@ export class FakeWorld {
 
   get(id: number): WorldActivity | undefined {
     const activity = this.activities.get(id);
-    return activity?.exists === true ? activity : undefined;
+    return activity?.exists === true && this.goneElsewhere?.(id) !== true ? activity : undefined;
   }
 
   live(): WorldActivity[] {
-    return [...this.activities.values()].filter((a) => a.exists);
+    return [...this.activities.values()].filter((a) => this.get(a.id) !== undefined);
   }
 
   createUpload(input: {
@@ -204,6 +212,7 @@ export class FakeWorld {
           : samples,
       });
       activity.distance *= this.uploadDistanceFactor;
+      this.onCreated?.(activity);
       upload.status = "ready";
       upload.activityId = activity.id;
     }

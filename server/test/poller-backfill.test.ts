@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Backfill } from "../src/service/backfill.ts";
 import { getActivity, listGroups } from "../src/state/repo.ts";
 import { addOuting, addSingle } from "./fixtures/synthetic-outings.ts";
 import { createHarness, type Harness } from "./machine-harness.ts";
@@ -195,16 +196,34 @@ describe("Backfill", () => {
   });
 
   it("reports a merge that fails its no-loss check in the dry run", async () => {
-    h = await createHarness({
-      settings: { backfill: { mode: "dry_run" } },
-    });
+    h = await createHarness({ settings: { backfill: { mode: "dry_run" } } });
     addOuting(h.world);
     h.clock.t += 10 * DAY;
-    // A writer failure inside the dry-run build is reported, not thrown.
-    h.settings.update({ merge: { speedLimitsMps: { run: 0.0001 } } });
-    const result = await h.backfill.runBatch();
-    expect(result.stopped).toBe("done");
-    expect(h.backfill.report().groups[0]?.decision).toMatch(/auto|merge_check_failed/);
+    const backfill = new Backfill({
+      db: h.db,
+      api: h.client,
+      backup: h.backup,
+      machine: h.machine,
+      settings: h.settings,
+      budget: h.budget,
+      clock: h.clock,
+      reportPath: join(h.dir, "reports", "failing.json"),
+      noLossCheck: () => ({
+        ok: false,
+        checkedValues: 1,
+        representedInOutput: 0,
+        representedInLedger: 0,
+        outputRecords: 0,
+        ledgerEntries: 0,
+        issues: [{ kind: "missing_value", detail: "synthetic" }],
+      }),
+    });
+    expect((await backfill.runBatch()).stopped).toBe("done");
+    const [entry] = backfill.report().groups;
+    expect(entry?.decision).toBe("merge_check_failed");
+    expect(entry?.report).toMatchObject({
+      noLoss: { ok: false, error: "exact no-loss check failed" },
+    });
   });
 
   it("live mode hands groups to the state machine", async () => {

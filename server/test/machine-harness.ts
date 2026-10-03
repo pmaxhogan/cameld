@@ -14,7 +14,7 @@ import { MergeMachine, type MachineOptions } from "../src/state/machine.ts";
 import { parkedByReason } from "../src/state/repo.ts";
 import { type SettingsPatch, SettingsStore } from "../src/state/settings.ts";
 import { StravaClient } from "../src/strava/client.ts";
-import { RateLimiter } from "../src/strava/rate-limiter.ts";
+import { type Clock, RateLimiter } from "../src/strava/rate-limiter.ts";
 import type { StravaWebSession } from "../src/web/session.ts";
 import { type FakeStravaApi, startFakeStravaApi } from "./fake-strava-api/server.ts";
 import { FakeWebSession } from "./fake-strava-api/web-session.ts";
@@ -61,6 +61,8 @@ export interface HarnessOptions {
   machine?: Partial<MachineOptions>;
   /** Replace the fake web session (null = no browser configured). */
   session?: StravaWebSession | null;
+  /** Build the web session from the harness clock (e.g. a real WebSession). */
+  webSession?: (clock: Clock) => StravaWebSession;
 }
 
 export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
@@ -109,7 +111,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       },
     });
     const web = new WebGate({
-      session: options.session === undefined ? session : options.session,
+      session:
+        options.webSession?.(clock) ?? (options.session === undefined ? session : options.session),
       notifier,
       metrics,
       now: () => clock.now(),

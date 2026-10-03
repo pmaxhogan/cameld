@@ -34,14 +34,15 @@ function detail(a: WorldActivity, origin: string) {
     device_name: a.deviceName ?? undefined,
     external_id: a.externalId,
     gear_id: a.gearId,
-    commute: a.commute,
-    trainer: a.trainer,
-    hide_from_home: a.hideFromHome,
+    // Like Strava, optional fields are sometimes absent rather than false.
+    commute: a.commute || undefined,
+    trainer: a.trainer || undefined,
+    hide_from_home: a.hideFromHome || undefined,
     private_note: a.privateNote,
     total_photo_count: a.photos.length,
     photo_count: 0,
     kudos_count: a.kudos.length,
-    comment_count: a.comments.length,
+    comment_count: a.comments.length || undefined,
     has_heartrate: a.samples.some((s) => s.heartRate !== undefined),
     map: { summary_polyline: "" },
     photo_base: origin,
@@ -77,10 +78,12 @@ export async function startFakeStravaApi(world: FakeWorld): Promise<FakeStravaAp
   app.addContentTypeParser("multipart/form-data", { parseAs: "buffer" }, (_req, body, done) => {
     done(null, body);
   });
-  app.addHook("onRequest", async (request) => {
+  app.addHook("onRequest", async (request, reply) => {
     const path = request.url.split("?")[0] as string;
     world.requests.push({ method: request.method, path });
     world.onRequest?.(request.method, path);
+    const status = world.failStatus?.(request.method, path) ?? null;
+    if (status !== null) return reply.code(status).send({ message: "synthetic failure" });
   });
   app.addHook("onSend", async (_request, reply) => {
     reply.header("x-ratelimit-limit", "200,2000");
@@ -131,6 +134,7 @@ export async function startFakeStravaApi(world: FakeWorld): Promise<FakeStravaAp
     const a = world.get(Number(request.params.id));
     if (a === undefined) return notFound(reply);
     if (a.samples.length === 0) return notFound(reply);
+    if (world.streamsOverride !== undefined) return world.streamsOverride(a.id);
     const t0 = a.samples[0]?.time ?? 0;
     const streams: Record<string, unknown> = {
       time: { data: a.samples.map((s) => Math.round((s.time - t0) / 1000)) },
@@ -149,7 +153,7 @@ export async function startFakeStravaApi(world: FakeWorld): Promise<FakeStravaAp
     return a.photos.map((p) => ({
       unique_id: p.uniqueId,
       urls: { "100": `${origin}/cdn/small/${p.uniqueId}`, "5000": `${origin}/cdn/${p.uniqueId}` },
-      created_at: p.createdAt,
+      created_at: p.createdAt === "" ? undefined : p.createdAt,
     }));
   });
 
@@ -189,7 +193,10 @@ export async function startFakeStravaApi(world: FakeWorld): Promise<FakeStravaAp
   app.get<{ Params: { uid: string } }>("/cdn/:uid", (request, reply) => {
     for (const a of world.activities.values()) {
       const photo = a.photos.find((p) => p.uniqueId === request.params.uid);
-      if (photo !== undefined) return reply.type("image/png").send(photo.bytes);
+      if (photo !== undefined) {
+        const type = photo.uniqueId.endsWith("-jpg") ? "image/jpeg" : "image/png";
+        return reply.type(type).send(photo.bytes);
+      }
     }
     return reply.code(404).send("missing");
   });

@@ -3,6 +3,8 @@ import {
   ChallengeError,
   LoginRequiredError,
   WebNotFoundError,
+  WebNotReadyError,
+  WebTimeoutError,
   WebUnexpectedResponseError,
 } from "../../src/web/errors.ts";
 import type { EditFormValues, Visibility } from "../../src/web/forms.ts";
@@ -32,7 +34,9 @@ export type DeleteMode =
   /** Claim success but delete nothing. */
   | "noop"
   /** Challenged before anything is sent. */
-  | "challenge";
+  | "challenge"
+  /** Answers an unexpected page and deletes nothing. */
+  | "error";
 
 export class FakeWebSession implements StravaWebSession {
   readonly #world: FakeWorld;
@@ -45,6 +49,10 @@ export class FakeWebSession implements StravaWebSession {
   photoFails = false;
   /** attachPhoto succeeds but the photo is not listed afterwards. */
   photoUnverified = false;
+  /** exportOriginal fails with a timeout (the export is deferred). */
+  exportFails = false;
+  /** getEditForm fails (the form is not hydrated). */
+  formFails = false;
   readonly calls: { op: string; id?: number }[] = [];
   readonly deleted: number[] = [];
 
@@ -97,6 +105,7 @@ export class FakeWebSession implements StravaWebSession {
 
   async exportOriginal(activityId: number): Promise<ExportedFile> {
     this.#check("export_original", activityId);
+    if (this.exportFails) throw new WebTimeoutError("export_original", 1);
     const original = this.#activity(activityId).original;
     if (original === null) throw new WebNotFoundError(`/activities/${activityId}/export_original`);
     return {
@@ -112,6 +121,7 @@ export class FakeWebSession implements StravaWebSession {
 
   async getEditForm(activityId: number): Promise<EditForm> {
     this.#check("edit_form", activityId);
+    if (this.formFails) throw new WebNotReadyError(`/activities/${activityId}/edit`, ["x"], "test");
     const a = this.#activity(activityId);
     return {
       activityId,
@@ -153,6 +163,7 @@ export class FakeWebSession implements StravaWebSession {
     DeletionAuthorization.consume(auth, activityId, this.#now());
     if (!this.loggedIn) throw new LoginRequiredError("delete: login required");
     if (this.deleteMode === "challenge") throw new ChallengeError("captcha", "delete challenged");
+    if (this.deleteMode === "error") throw new WebUnexpectedResponseError("synthetic odd page");
     const a = this.#activity(activityId);
     if (this.deleteMode === "noop") return { activityId, confirmedAt: this.#now() };
     a.exists = false;

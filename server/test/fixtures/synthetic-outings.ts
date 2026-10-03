@@ -134,6 +134,14 @@ export interface OutingOptions {
   withPhoto?: boolean;
   /** The Fitbit copy has no original file (Strava has none to export). */
   fitbitWithoutOriginal?: boolean;
+  /** Indoor session: neither copy has positions. */
+  indoor?: boolean;
+  /** Device name of the wrist copy (default "Fitbit"); anything else is an "other" device. */
+  wristDevice?: string;
+}
+
+function indoorOnly(samples: ActivitySample[]): ActivitySample[] {
+  return samples.map(({ lat: _lat, lng: _lng, ...rest }) => rest);
 }
 
 /** Two copies of one fictional run: app (FIT, clean GPS) and Fitbit (TCX, heart rate). */
@@ -141,8 +149,8 @@ export function addOuting(world: FakeWorld, options: OutingOptions = {}): Synthe
   const day = options.day ?? 0;
   const seed = options.seed ?? 7 + day;
   const start = SYNTHETIC_START + day * DAY_MS;
-  const app = syntheticTrack({ seed, start, seconds: 600, from: 10 });
-  const fitbit = syntheticTrack({
+  let app = syntheticTrack({ seed, start, seconds: 600, from: 10 });
+  let fitbit = syntheticTrack({
     seed: seed + 1000,
     start,
     seconds: 580,
@@ -151,6 +159,10 @@ export function addOuting(world: FakeWorld, options: OutingOptions = {}): Synthe
     heartRate: true,
     altitudeBase: 18,
   });
+  if (options.indoor === true) {
+    app = indoorOnly(app);
+    fitbit = indoorOnly(fitbit);
+  }
   const sport = options.sport ?? "Run";
   const fitbitFile = `fitbit_${String(10_000_000_000 + seed)}.tcx`;
   const appActivity = world.add({
@@ -185,9 +197,11 @@ export function addOuting(world: FakeWorld, options: OutingOptions = {}): Synthe
     name: "Quillmere Tempo",
     description: null,
     sportType: sport,
-    deviceName: "Fitbit",
-    externalId: fitbitFile,
+    deviceName: options.wristDevice ?? "Fitbit",
+    externalId: options.wristDevice === undefined ? fitbitFile : `synthetic-${seed}-wrist.tcx`,
     privateNote: "synthetic wrist note",
+    commute: true,
+    trainer: true,
     original:
       options.fitbitWithoutOriginal === true
         ? null
@@ -213,6 +227,32 @@ export function addSingle(world: FakeWorld, day: number): WorldActivity {
       filename: `synthetic-single-${day}-activity.fit`,
       bytes: Buffer.from(writeFitActivity(samples, { sport: "running" })),
     },
+    samples,
+  });
+}
+
+/** A wrist recording that covers only part of an outing (a split second part). */
+export function addWristPart(
+  world: FakeWorld,
+  options: { day?: number; seed: number; from: number; seconds: number },
+): WorldActivity {
+  const start = SYNTHETIC_START + (options.day ?? 0) * DAY_MS;
+  const samples = syntheticTrack({
+    seed: options.seed,
+    start,
+    from: options.from,
+    seconds: options.seconds,
+    noise: 1,
+    lagSeconds: 5,
+    heartRate: true,
+  });
+  const file = `fitbit_${String(20_000_000_000 + options.seed)}.tcx`;
+  return world.add({
+    name: "Quillmere Tempo Part",
+    sportType: "Run",
+    deviceName: "Fitbit",
+    externalId: file,
+    original: { filename: file, bytes: Buffer.from(toTcx(samples), "utf8") },
     samples,
   });
 }
