@@ -234,7 +234,7 @@ export function registerUiRoutes(api: FastifyInstance, deps: UiDeps): void {
           outcome: known.status >= 500 ? "failed" : "refused",
           details: { error: known.code, detail: known.detail ?? null },
         });
-        if (known.status >= 500) log?.error({ err: error, action }, "ui write failed");
+        if (!(error instanceof HttpError)) log?.error({ err: error, action }, "ui write failed");
         return reply.code(known.status).send({
           error: known.code,
           ...(known.detail === undefined ? {} : { detail: known.detail }),
