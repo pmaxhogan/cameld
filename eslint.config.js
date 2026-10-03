@@ -82,6 +82,11 @@ export default tseslint.config(
     rules: { "no-console": ["error", { allow: ["error", "warn"] }] },
   },
   {
+    // The Web Push service worker runs in a ServiceWorkerGlobalScope, not a page.
+    files: ["web/public/sw.js"],
+    languageOptions: { globals: { ...globals.serviceworker } },
+  },
+  {
     files: ["scripts/**/*.mjs"],
     rules: { "no-console": "off" },
   },

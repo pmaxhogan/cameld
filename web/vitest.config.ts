@@ -9,6 +9,10 @@ export default mergeConfig(
       name: "web",
       root: fileURLToPath(new URL("./", import.meta.url)),
       environment: "happy-dom",
+      // The Strava login view embeds an iframe; never let happy-dom fetch it.
+      environmentOptions: {
+        happyDOM: { settings: { navigation: { disableChildFrameNavigation: true } } },
+      },
       include: ["test/**/*.test.ts"],
     },
   }),

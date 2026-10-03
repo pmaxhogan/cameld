@@ -25,5 +25,11 @@ export default defineConfig({
     // MapLibre alone is roughly 250 kB gzipped and is the honest floor for a
     // map UI, so the limit is raised so a real regression still trips it.
     chunkSizeWarningLimit: 1500,
+    // MapLibre gets its own chunk so the app chunk's size stays a useful signal.
+    rolldownOptions: {
+      output: {
+        codeSplitting: { groups: [{ name: "maplibre", test: /node_modules[\\/]maplibre-gl/ }] },
+      },
+    },
   },
 });
