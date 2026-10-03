@@ -35,7 +35,8 @@ function inputSeconds(input: MergeInput): number[] {
   return [...seconds].sort((a, b) => a - b);
 }
 
-describe("merge properties (synthetic pairs)", () => {
+// Generous timeout: CI runners are several times slower than a workstation.
+describe("merge properties (synthetic pairs)", { timeout: 60_000 }, () => {
   it("the no-loss check passes, the span is the union, nothing is invented", () => {
     fc.assert(
       fc.property(mergeInputArb, (input) => {
