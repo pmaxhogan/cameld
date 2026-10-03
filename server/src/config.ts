@@ -7,9 +7,10 @@ import { z } from "zod";
  * is the ONLY reader of process.env: everything else receives a Config.
  * Anything that is not a deployment fundamental belongs in the settings store.
  *
- * Credentials (Strava client secret, web login, session secret, VAPID keys)
- * are optional here because Wave 1 does not use them yet; later waves make the
- * relevant ones required where the feature needs them.
+ * Credentials are optional here so the service still boots (and serves
+ * /healthz) while being set up. Features fail closed without theirs: with no
+ * Cloudflare Access or password configuration every UI and /api request is
+ * refused, and without VAPID keys push is off.
  */
 
 const optionalString = z
@@ -67,6 +68,26 @@ export const envSchema = z.object({
    * persistent, logged-in strava.com profile), e.g. http://cameld-browser:9222.
    */
   BROWSER_CDP_URL: z.preprocess(blankAsUnset, z.string().url().optional()),
+  /**
+   * KasmVNC web client of the same sidecar, reached only server side and
+   * proxied at /browser/ (e.g. https://cameld-browser:6901). Its basic-auth
+   * credentials are injected by the proxy; the browser never sees them.
+   */
+  BROWSER_VNC_URL: z.preprocess(blankAsUnset, z.string().url().optional()),
+  BROWSER_VNC_USER: optionalString,
+  BROWSER_VNC_PASSWORD: optionalString,
+  /** PEM file of the sidecar's self-signed certificate (its only TLS trust anchor). */
+  BROWSER_VNC_CA_FILE: optionalString,
+  /** Optional SHA-256 pin of that certificate (hex, colons allowed). */
+  BROWSER_VNC_CERT_SHA256: optionalString,
+
+  /** MapLibre style for the review maps. "none" shows tracks on a blank canvas. */
+  MAP_STYLE_URL: z.preprocess(
+    blankAsUnset,
+    z
+      .union([z.literal("none"), z.string().url()])
+      .default("https://tiles.openfreemap.org/styles/liberty"),
+  ),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -111,7 +132,14 @@ export interface Config {
   };
   browser: {
     cdpUrl: string | undefined;
+    vncUrl: string | undefined;
+    vncUser: string | undefined;
+    vncPassword: string | undefined;
+    vncCaFile: string | undefined;
+    vncCertSha256: string | undefined;
   };
+  /** MapLibre style URL, or null for a blank canvas. */
+  mapStyleUrl: string | null;
 }
 
 export class ConfigError extends Error {
@@ -176,6 +204,12 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     },
     browser: {
       cdpUrl: env.BROWSER_CDP_URL,
+      vncUrl: env.BROWSER_VNC_URL?.replace(/\/+$/, ""),
+      vncUser: env.BROWSER_VNC_USER,
+      vncPassword: env.BROWSER_VNC_PASSWORD,
+      vncCaFile: env.BROWSER_VNC_CA_FILE,
+      vncCertSha256: env.BROWSER_VNC_CERT_SHA256,
     },
+    mapStyleUrl: env.MAP_STYLE_URL === "none" ? null : env.MAP_STYLE_URL,
   };
 }
