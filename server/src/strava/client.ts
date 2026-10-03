@@ -65,13 +65,30 @@ export interface PollOptions {
 }
 
 const DEFAULT_BASE_URL = "https://www.strava.com/api/v3";
-const DUPLICATE = /duplicate of activity (\d+)/i;
+/** Plain form: "... duplicate of activity 123". */
+const DUPLICATE_PLAIN = /duplicate of activity (\d+)/i;
+/**
+ * HTML form Strava really sends: "... duplicate of <a href='/activities/123'
+ * ...>Evening Walk</a>". The id comes from the href (quoted either way, with
+ * or without an origin), never from the link text.
+ */
+const DUPLICATE_LINK =
+  /duplicate of\s*<a\b[^>]*?\bhref\s*=\s*["']?(?:https?:\/\/[^/"'\s>]+)?\/activities\/(\d+)/i;
 
-/** Extract the existing activity id from an upload error such as "... duplicate of activity 123". */
+function toId(digits: string): number | null {
+  const id = Number.parseInt(digits, 10);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+/**
+ * Extract the existing activity id from an upload duplicate error, in either
+ * form Strava uses: plain text ("duplicate of activity 123") or an HTML link
+ * ("duplicate of <a href='/activities/123'>Evening Walk</a>").
+ */
 export function parseDuplicateOf(error: string | null | undefined): number | null {
   if (error === null || error === undefined) return null;
-  const match = DUPLICATE.exec(error);
-  return match === null ? null : Number.parseInt(match[1] as string, 10);
+  const match = DUPLICATE_LINK.exec(error) ?? DUPLICATE_PLAIN.exec(error);
+  return match === null ? null : toId(match[1] as string);
 }
 
 /** Classify a finished upload. Returns null while Strava is still processing it. */

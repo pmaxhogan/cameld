@@ -55,6 +55,29 @@ describe("parseDuplicateOf and classifyUpload", () => {
     expect(parseDuplicateOf(undefined)).toBeNull();
   });
 
+  it("parses the html duplicate form strava really sends, taking the id from the href", () => {
+    expect(
+      parseDuplicateOf(
+        "merged.fit duplicate of <a href='/activities/12345' target='_blank'>Evening Walk</a>",
+      ),
+    ).toBe(12345);
+    expect(
+      parseDuplicateOf('x.fit duplicate of <a class="x" href="/activities/987">Walk 42</a>'),
+    ).toBe(987);
+    expect(
+      parseDuplicateOf(
+        "x duplicate of <a href='https://www.strava.com/activities/31337'>Activity 7</a>",
+      ),
+    ).toBe(31337);
+    expect(parseDuplicateOf("duplicate of <a href=/activities/55>Run</a>")).toBe(55);
+    // Link text digits are never mistaken for the id.
+    expect(parseDuplicateOf("duplicate of <a href='/athletes/9'>Activity 77</a>")).toBeNull();
+    expect(parseDuplicateOf("duplicate of activity 0")).toBeNull();
+    expect(
+      classifyUpload({ id: 3, error: "a duplicate of <a href='/activities/42'>Walk</a>" }),
+    ).toMatchObject({ kind: "duplicate", duplicateOf: 42 });
+  });
+
   it("classifies uploads", () => {
     expect(classifyUpload({ id: 1, status: "Your activity is still being processed." })).toBeNull();
     expect(classifyUpload({ id: 1, error: "", activity_id: null })).toBeNull();
