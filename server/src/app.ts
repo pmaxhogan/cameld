@@ -19,6 +19,18 @@ export type Authorize = (request: FastifyRequest) => boolean | Promise<boolean>;
 
 export const denyAll: Authorize = () => false;
 
+/** True for anything that is or decodes to an /api path, in any case or slash spelling. */
+export function isApiPath(url: string): boolean {
+  let path = url.split("?")[0] as string;
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    return true;
+  }
+  path = path.replace(/\/{2,}/g, "/").toLowerCase();
+  return path === "/api" || path.startsWith("/api/");
+}
+
 export interface AppDeps {
   config: Pick<Config, "version" | "webDistDir">;
   log: Logger;
@@ -50,15 +62,6 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     trustProxy: true,
   });
 
-  const authorize = deps.authorize ?? denyAll;
-  app.addHook("onRequest", async (request, reply) => {
-    const path = request.url.split("?")[0] as string;
-    if (path !== "/api" && !path.startsWith("/api/")) return;
-    if (!(await authorize(request))) {
-      return reply.code(401).send({ error: "unauthorized" });
-    }
-  });
-
   app.get("/healthz", (): Health => ({ ok: true, version: deps.config.version }));
 
   const metrics = deps.metrics;
@@ -68,18 +71,30 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       return reply.type(metrics.contentType).send(body);
     });
   }
+  // Every /api route lives in this encapsulated plugin, so the authorize hook
+  // covers whatever URL spelling Fastify routes to them.
+  const authorize = deps.authorize ?? denyAll;
   const data = deps.data;
-  if (data !== undefined) {
-    app.get("/api/backfill/report", () => data.backfillReport());
-    app.get("/api/status", () => data.status());
-  }
+  await app.register(
+    async (api) => {
+      api.addHook("onRequest", async (request, reply) => {
+        if (!(await authorize(request))) {
+          return reply.code(401).send({ error: "unauthorized" });
+        }
+      });
+      if (data !== undefined) {
+        api.get("/backfill/report", () => data.backfillReport());
+        api.get("/status", () => data.status());
+      }
+    },
+    { prefix: "/api" },
+  );
 
   const indexHtml = `${deps.config.webDistDir}/index.html`;
   if (existsSync(indexHtml)) {
-    await app.register(fastifyStatic, { root: deps.config.webDistDir });
+    await app.register(fastifyStatic, { root: deps.config.webDistDir, wildcard: false });
     app.setNotFoundHandler((request, reply) => {
-      const path = request.url.split("?")[0] ?? "";
-      if (request.method === "GET" && !path.startsWith("/api/") && path !== "/api") {
+      if (request.method === "GET" && !isApiPath(request.url)) {
         return reply.sendFile("index.html");
       }
       return reply.code(404).send({ error: "not found" });

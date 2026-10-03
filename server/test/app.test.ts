@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { parseHealth } from "@cameld/shared";
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildApp } from "../src/app.ts";
+import { buildApp, isApiPath } from "../src/app.ts";
 import { createLogger } from "../src/logging.ts";
 
 const log = createLogger({ logLevel: "silent" });
@@ -127,12 +127,53 @@ describe("/api auth", () => {
       data: { backfillReport: () => ({ groups: [] }), status: () => ({ frozen: false }) },
     });
     apps.push(app);
-    for (const url of ["/api/status", "/api/backfill/report", "/api/unknown", "/api"]) {
+    for (const url of ["/api/status", "/api/backfill/report"]) {
       const response = await app.inject({ method: "GET", url });
       expect(response.statusCode).toBe(401);
       expect(response.json()).toEqual({ error: "unauthorized" });
     }
+    for (const url of [
+      "/%61pi/status",
+      "//api/status",
+      "/api/status/",
+      "/API/status",
+      "/api",
+      "/api/unknown",
+    ]) {
+      const response = await app.inject({ method: "GET", url });
+      expect([401, 404]).toContain(response.statusCode);
+    }
     expect((await app.inject({ method: "GET", url: "/healthz" })).statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: "/metrics" })).statusCode).toBe(200);
+  });
+});
+
+describe("odd /api spellings with the SPA served", () => {
+  it("never serves data or the SPA for encoded, doubled or upper-case /api paths", async () => {
+    const dist = mkdtempSync(join(tmpdir(), "cameld-web-"));
+    writeFileSync(join(dist, "index.html"), "<html><body>spa</body></html>");
+    const app = await buildApp({
+      config: { version: "1.0.0", webDistDir: dist },
+      log,
+      data: { backfillReport: () => ({ groups: [] }), status: () => ({ frozen: false }) },
+    });
+    apps.push(app);
+    for (const url of ["/%61pi/status", "//api/status", "/api/status/", "/API/status"]) {
+      const response = await app.inject({ method: "GET", url });
+      expect([401, 404]).toContain(response.statusCode);
+      expect(response.body).not.toContain("frozen");
+      expect(response.body).not.toContain("spa");
+    }
+    expect((await app.inject({ method: "GET", url: "/history" })).body).toContain("spa");
+  });
+});
+
+describe("isApiPath", () => {
+  it("normalizes encoding, case and slashes, and treats undecodable paths as api", () => {
+    expect(isApiPath("/%61pi/x?y=1")).toBe(true);
+    expect(isApiPath("//API//x")).toBe(true);
+    expect(isApiPath("/%E0%A4%A")).toBe(true);
+    expect(isApiPath("/apiary")).toBe(false);
+    expect(isApiPath("/history")).toBe(false);
   });
 });
