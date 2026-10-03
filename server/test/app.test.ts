@@ -32,7 +32,11 @@ describe("web serving", () => {
   it("serves the SPA and falls back to index.html, but 404s unknown /api paths", async () => {
     const dist = mkdtempSync(join(tmpdir(), "cameld-web-"));
     writeFileSync(join(dist, "index.html"), "<html><body>spa</body></html>");
-    const app = await buildApp({ config: { version: "1.0.0", webDistDir: dist }, log });
+    const app = await buildApp({
+      config: { version: "1.0.0", webDistDir: dist },
+      log,
+      authorize: () => true,
+    });
     apps.push(app);
 
     const root = await app.inject({ method: "GET", url: "/" });
@@ -79,6 +83,7 @@ describe("metrics and read-only data routes", () => {
       log,
       metrics,
       data: { backfillReport: () => ({ groups: [] }), status: () => ({ frozen: false }) },
+      authorize: () => Promise.resolve(true),
     });
     apps.push(app);
     const scraped = await app.inject({ method: "GET", url: "/metrics" });
@@ -99,5 +104,35 @@ describe("metrics and read-only data routes", () => {
     });
     apps.push(bare);
     expect((await bare.inject({ method: "GET", url: "/metrics" })).statusCode).toBe(404);
+  });
+});
+
+describe("/api auth", () => {
+  it("denies every /api route by default but leaves /healthz and /metrics open", async () => {
+    const { Metrics } = await import("../src/service/metrics.ts");
+    const metrics = new Metrics({
+      defaultMetrics: false,
+      sources: {
+        parkedByReason: () => ({}),
+        frozen: () => false,
+        rateUsage: () => null,
+        backupTotals: () => ({ bytes: 0, files: 0 }),
+        backfill: () => ({ activities: 0, cursorMs: null, done: false, readsToday: 0 }),
+      },
+    });
+    const app = await buildApp({
+      config: { version: "1.0.0", webDistDir: join(tmpdir(), "does-not-exist") },
+      log,
+      metrics,
+      data: { backfillReport: () => ({ groups: [] }), status: () => ({ frozen: false }) },
+    });
+    apps.push(app);
+    for (const url of ["/api/status", "/api/backfill/report", "/api/unknown", "/api"]) {
+      const response = await app.inject({ method: "GET", url });
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toEqual({ error: "unauthorized" });
+    }
+    expect((await app.inject({ method: "GET", url: "/healthz" })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/metrics" })).statusCode).toBe(200);
   });
 });
