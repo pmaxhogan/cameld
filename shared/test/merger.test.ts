@@ -189,6 +189,29 @@ describe("mergeSamples", () => {
     ]);
   });
 
+  it("ledgers every same-second twin of an excluded value", () => {
+    const twin = (ms: number): ActivitySample => ({
+      time: S + ms,
+      source: "x",
+      ...pos(50),
+      altitude: 30,
+    });
+    const result = merge({
+      app: [at(0, { ...pos(0), altitude: 10 })],
+      fitbit: [twin(0), twin(300)],
+    });
+    expect(reasons(result).sort()).toEqual([
+      "fitbit:0:altitude:field_source_preferred",
+      "fitbit:0:lat:position_app_preferred",
+      "fitbit:0:lng:position_app_preferred",
+      "fitbit:1:altitude:field_source_preferred",
+      "fitbit:1:lat:position_app_preferred",
+      "fitbit:1:lng:position_app_preferred",
+    ]);
+    const dropped = merge({ app: [at(0, pos(0))], fitbit: [at(1, pos(500)), at(1, pos(500))] });
+    expect(dropped.ledger.filter((e) => e.reason === "impossible_speed")).toHaveLength(4);
+  });
+
   it("ledgers values FIT cannot store instead of throwing", () => {
     const result = merge({
       app: [at(0, { altitude: -600, ...pos(0) }), at(1, { lat: 89, lng: 179.99 })],

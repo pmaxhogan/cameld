@@ -181,6 +181,20 @@ class Ledger {
     this.add(side, index, "lat", reason, detail);
     this.add(side, index, "lng", reason, detail);
   }
+
+  /** Exclude a value and every same-second twin it stands for. */
+  addValued(side: MergeSide, valued: Valued, field: SampleField, reason: ExclusionReason): void {
+    for (const index of [valued.index, ...valued.equal]) {
+      this.add(side, index, field, reason);
+    }
+  }
+
+  /** Exclude a fix and every same-second twin it stands for. */
+  addFixes(side: MergeSide, fix: Fix, reason: ExclusionReason, detail?: string): void {
+    for (const index of [fix.index, ...fix.equal]) {
+      this.addFix(side, index, reason, detail);
+    }
+  }
 }
 
 /** Collapse one side into per-second slots (step 1 and 5 of the module doc). */
@@ -289,7 +303,7 @@ export function mergeSamples(
         fitbitFix !== undefined &&
         (fitbitFix.lat !== appFix.lat || fitbitFix.lng !== appFix.lng)
       ) {
-        ledger.addFix("fitbit", fitbitFix.index, "position_app_preferred");
+        ledger.addFixes("fitbit", fitbitFix, "position_app_preferred");
       }
     } else if (fitbitFix !== undefined) {
       let keep = true;
@@ -303,9 +317,9 @@ export function mergeSamples(
             drops = 0;
           } else {
             keep = false;
-            ledger.addFix(
+            ledger.addFixes(
               "fitbit",
-              fitbitFix.index,
+              fitbitFix,
               "impossible_speed",
               `${speed.toFixed(1)} m/s over ${dt} s exceeds ${limit} m/s`,
             );
@@ -334,7 +348,7 @@ export function mergeSamples(
         origin[field] = { side, index: used.index };
       }
       if (unused !== undefined && unused.value !== used?.value) {
-        ledger.add(otherSide, unused.index, field, "field_source_preferred");
+        ledger.addValued(otherSide, unused, field, "field_source_preferred");
       }
     }
     samples.push(sample);

@@ -44,6 +44,8 @@ export interface SyntheticPairOptions {
   appGap?: readonly [number, number] | undefined;
   /** Every Nth app second gets a second record 400 ms later (0 = never). */
   appDuplicateEvery?: number | undefined;
+  /** Every Nth Fitbit second gets an identical copy 300 ms later (0 = never). */
+  fitbitDuplicateEvery?: number | undefined;
   /** Every Nth Fitbit second has no fix (0 = never). */
   fitbitMissingFixEvery?: number | undefined;
   spikes?: readonly SyntheticSpike[] | undefined;
@@ -136,13 +138,17 @@ export function syntheticPair(options: SyntheticPairOptions): SyntheticPair {
     sample.distance = fitbitDistance;
     fitbitDistance += speedMps * (0.9 + random() * 0.3);
     fitbit.push(sample);
+    const copyEvery = options.fitbitDuplicateEvery ?? 0;
+    if (copyEvery > 0 && t % copyEvery === 0) {
+      fitbit.push({ ...sample, time: sample.time + 300 });
+    }
   }
   return { app, fitbit };
 }
 
 /**
  * Random pair options: offsets, early and late starts on both sides, app GPS
- * gaps, sub-second duplicates, missing Fitbit fixes, noise and position
+ * gaps, sub-second duplicates on both sides, missing Fitbit fixes, noise and position
  * spikes (some long enough to force a re-anchor).
  */
 export const syntheticPairOptionsArb: fc.Arbitrary<SyntheticPairOptions> = fc
@@ -163,6 +169,7 @@ export const syntheticPairOptionsArb: fc.Arbitrary<SyntheticPairOptions> = fc
       { nil: undefined },
     ),
     appDuplicateEvery: fc.integer({ min: 0, max: 15 }),
+    fitbitDuplicateEvery: fc.integer({ min: 0, max: 6 }),
     fitbitMissingFixEvery: fc.integer({ min: 0, max: 9 }),
     spikes: fc.array(
       fc.record({
