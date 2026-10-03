@@ -16,7 +16,7 @@ import type { StravaDetailedActivity, StravaPhoto, UploadDataType } from "../str
 import { WebNotFoundError } from "../web/errors.ts";
 import type { ReadGate } from "./budget.ts";
 import type { Metrics } from "./metrics.ts";
-import { WebPausedError, type WebGate } from "./web-gate.ts";
+import type { WebGate } from "./web-gate.ts";
 
 /**
  * Activity backups (ARCHITECTURE.md section 7, rule L20): full metadata, all
@@ -92,7 +92,7 @@ export function dataTypeOf(filename: string): UploadDataType | null {
 }
 
 export function safeFilename(name: string): string {
-  const base = name.split(/[\\/]/).pop() ?? "";
+  const base = name.split(/[\\/]/).pop() as string;
   const cleaned = base.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "");
   return (cleaned === "" ? "original" : cleaned).slice(-120);
 }
@@ -123,7 +123,7 @@ const defaultFetchPhoto: FetchPhoto = async (url) => {
   if (!response.ok) throw new Error(`photo download returned ${response.status}`);
   return {
     bytes: new Uint8Array(await response.arrayBuffer()),
-    contentType: response.headers.get("content-type") ?? "application/octet-stream",
+    contentType: String(response.headers.get("content-type")),
   };
 };
 
@@ -146,10 +146,6 @@ export class BackupService {
     this.#log = options.log;
     this.#metrics = options.metrics;
     this.#fetchPhoto = options.fetchPhoto ?? defaultFetchPhoto;
-  }
-
-  get root(): string {
-    return this.#root;
   }
 
   #has(activityId: number, kind: string): boolean {
@@ -394,9 +390,7 @@ export class BackupService {
       setActivityFields(this.#db, activityId, { web_form_saved: 1 });
       return isNew;
     } catch (error) {
-      if (!(error instanceof WebPausedError)) {
-        this.#log?.warn({ err: error, activityId }, "web form backup deferred");
-      }
+      this.#log?.warn({ err: error, activityId }, "web form backup deferred");
       return false;
     }
   }

@@ -22,9 +22,6 @@ import type { WebGate } from "./web-gate.ts";
  */
 
 export const LOOKBACK_MS = 7 * 24 * 3600 * 1000;
-/** Daily reads kept back from the poll's optional work (retrying old backups). */
-export const READ_RESERVE = 50;
-const RETRY_LIMIT = 20;
 
 export interface PollerOptions {
   db: DatabaseSync;
@@ -37,6 +34,12 @@ export interface PollerOptions {
   limiter?: RateLimiter;
   metrics?: Metrics;
   log?: Logger;
+  /** Activities listed per page. Default 100. */
+  pageSize?: number;
+  /** Older incomplete backups retried per poll. Default 20. */
+  retryLimit?: number;
+  /** Daily reads kept back from that optional retry work. Default 50. */
+  readReserve?: number;
 }
 
 export interface PollResult {
@@ -50,6 +53,9 @@ export interface PollResult {
 export class Poller {
   readonly #o: PollerOptions;
   readonly #log: Logger | undefined;
+  readonly #pageSize: number;
+  readonly #retryLimit: number;
+  readonly #readReserve: number;
   #running = false;
   readonly #timers = new Map<string, NodeJS.Timeout>();
   #stopped = true;
@@ -57,6 +63,9 @@ export class Poller {
   constructor(options: PollerOptions) {
     this.#o = options;
     this.#log = options.log?.child({ mod: "poller" });
+    this.#pageSize = options.pageSize ?? 100;
+    this.#retryLimit = options.retryLimit ?? 20;
+    this.#readReserve = options.readReserve ?? 50;
   }
 
   #readsLeftToday(): number {
@@ -80,13 +89,13 @@ export class Poller {
       const after = Math.floor(((newest.m ?? now) - LOOKBACK_MS) / 1000);
       const ids: number[] = [];
       for (let page = 1; ; page += 1) {
-        const batch = await api.listActivities({ after, page, per_page: 100 });
+        const batch = await api.listActivities({ after, page, per_page: this.#pageSize });
         for (const activity of batch) {
           upsertActivity(db, activity, clock.now());
           ids.push(activity.id);
         }
         listed += batch.length;
-        if (batch.length < 100) break;
+        if (batch.length < this.#pageSize) break;
       }
       // New activities get a full backup; known ones only what is still missing.
       const incomplete = db
@@ -101,7 +110,7 @@ export class Poller {
       for (const { id } of incomplete) {
         const isListed = listedIds.has(id);
         if (!isListed) {
-          if (retries >= RETRY_LIMIT || this.#readsLeftToday() < READ_RESERVE) continue;
+          if (retries >= this.#retryLimit || this.#readsLeftToday() < this.#readReserve) continue;
           retries += 1;
         }
         try {
@@ -130,7 +139,7 @@ export class Poller {
         listed,
         backedUp,
         groups,
-        error: error instanceof Error ? error.message : String(error),
+        error: (error as Error).message,
       };
     } finally {
       this.#running = false;

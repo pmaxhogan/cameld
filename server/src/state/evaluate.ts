@@ -62,20 +62,19 @@ export function groupIdFor(startMs: number, ids: readonly number[]): string {
 export class SampleCache {
   readonly #db: DatabaseSync;
   readonly #backup: BackupService;
-  readonly #cache = new Map<number, ActivitySample[] | null>();
+  readonly #cache = new Map<number, ActivitySample[]>();
 
   constructor(db: DatabaseSync, backup: BackupService) {
     this.#db = db;
     this.#backup = backup;
   }
 
-  /** Samples of the original file, or null when no original is stored. */
-  async samples(activityId: number): Promise<ActivitySample[] | null> {
+  /** Samples of the original file. Callers only ask once the original is stored. */
+  async samples(activityId: number): Promise<ActivitySample[]> {
     const cached = this.#cache.get(activityId);
     if (cached !== undefined) return cached;
-    const original = await this.#backup.readOriginal(activityId);
-    const samples =
-      original === null ? null : parseOriginal(original, `activity:${activityId}`).samples;
+    const original = (await this.#backup.readOriginal(activityId))!;
+    const samples = parseOriginal(original, `activity:${activityId}`).samples;
     this.#cache.set(activityId, samples);
     return samples;
   }
@@ -83,7 +82,7 @@ export class SampleCache {
   /** Concatenated samples of several activities, in the given order. */
   async concat(ids: readonly number[]): Promise<ActivitySample[]> {
     const out: ActivitySample[] = [];
-    for (const id of ids) out.push(...((await this.samples(id)) ?? []));
+    for (const id of ids) out.push(...(await this.samples(id)));
     return out;
   }
 
@@ -95,7 +94,7 @@ export class SampleCache {
     const recordings: MatchRecording[] = [];
     for (const id of ids) {
       const samples = await this.samples(id);
-      recordings.push(recordingOf(requireActivity(this.#db, id), samples ?? undefined));
+      recordings.push(recordingOf(requireActivity(this.#db, id), samples));
     }
     return evaluateGroup(recordings, settings);
   }

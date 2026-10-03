@@ -45,7 +45,7 @@ export class FreezeStore {
     return {
       frozen: true,
       reason: row.reason,
-      evidence: row.evidence === null ? null : (JSON.parse(row.evidence) as unknown),
+      evidence: JSON.parse(row.evidence as string) as unknown,
       frozenAt: row.frozen_at,
     };
   }

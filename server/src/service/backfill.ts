@@ -2,7 +2,7 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { Logger } from "../logging.ts";
-import { buildMerge, MergeCheckError } from "../state/build.ts";
+import { buildMerge, type MergeCheckError, type NoLossCheck } from "../state/build.ts";
 import {
   candidateComponents,
   groupIdFor,
@@ -48,6 +48,8 @@ export interface BackfillOptions {
   /** Where the dry-run report JSON is written. */
   reportPath: string;
   log?: Logger;
+  /** Injection point for tests; defaults to the real exact check. */
+  noLossCheck?: NoLossCheck;
 }
 
 export interface BatchResult {
@@ -125,9 +127,7 @@ export class Backfill {
           before: Math.ceil(cursor / 1000),
           per_page: settings.pageSize,
         });
-        const fresh = page.filter(
-          (a) => Date.parse(a.start_date) < cursor || progress.cursorMs === null,
-        );
+        const fresh = page.filter((a) => Date.parse(a.start_date) < cursor);
         if (fresh.length === 0) {
           this.#save(cursor, true, 0);
           result.stopped = "done";
@@ -159,7 +159,7 @@ export class Backfill {
         result.stopped = "budget";
       } else {
         result.stopped = "error";
-        result.error = error instanceof Error ? error.message : String(error);
+        result.error = (error as Error).message;
         if (!isTransient(error)) this.#log?.error({ err: error }, "backfill batch failed");
       }
     } finally {
@@ -206,13 +206,16 @@ export class Backfill {
           const app = await cache.concat(result.app.members.map((m) => Number(m.id)));
           const fitbit = await cache.concat(result.fitbit.members.map((m) => Number(m.id)));
           try {
-            const built = buildMerge({
-              app,
-              fitbit,
-              offsetSeconds: result.metrics?.alignment?.offsetSeconds ?? 0,
-              sport: activities[0]?.sportType ?? null,
-              settings: settings.merge,
-            });
+            const built = buildMerge(
+              {
+                app,
+                fitbit,
+                offsetSeconds: result.metrics?.alignment?.offsetSeconds ?? 0,
+                sport: activities[0]!.sportType,
+                settings: settings.merge,
+              },
+              this.#o.noLossCheck,
+            );
             report.noLoss = {
               ok: true,
               checkedValues: built.noLoss.checkedValues,
@@ -224,8 +227,8 @@ export class Backfill {
             decision = "merge_check_failed";
             report.noLoss = {
               ok: false,
-              error: error instanceof Error ? error.message : String(error),
-              evidence: error instanceof MergeCheckError ? error.evidence : null,
+              error: (error as Error).message,
+              evidence: (error as MergeCheckError).evidence,
             };
           }
         }

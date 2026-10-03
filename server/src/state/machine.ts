@@ -73,6 +73,7 @@ import {
   upsertActivity,
   type WriteKind,
   type WriteRow,
+  withTransaction,
   writesFor,
 } from "./repo.ts";
 import { matchSettingsOf, type SettingsStore } from "./settings.ts";
@@ -187,7 +188,8 @@ function is404(error: unknown): boolean {
 }
 
 function message(error: unknown): string {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  const e = error as Error;
+  return `${e.name}: ${e.message}`;
 }
 
 const OUTCOMES: Partial<Record<GroupStatus, MergeOutcome>> = {
@@ -206,15 +208,30 @@ function sameExternalId(stored: unknown, ours: string): boolean {
 
 const MERGE_MARKER = "merged by cameld";
 
-function metadataOf(detail: StravaDetailedActivity | null): ActivityMetadata {
+function metadataOf(detail: StravaDetailedActivity): ActivityMetadata {
   return {
-    name: detail?.name ?? null,
-    description: detail?.description ?? null,
-    sportType: detail?.sport_type ?? null,
-    gearId: detail?.gear_id ?? null,
-    commute: detail?.commute ?? null,
-    trainer: detail?.trainer ?? null,
+    name: detail.name,
+    description: detail.description ?? null,
+    sportType: detail.sport_type,
+    gearId: detail.gear_id ?? null,
+    commute: detail.commute ?? null,
+    trainer: detail.trainer ?? null,
   };
+}
+
+/** API fields carried to the merge or a restored copy (only those that are set). */
+function updateFields(meta: ActivityMetadata): UpdateActivityFields {
+  const all = {
+    name: meta.name,
+    description: meta.description,
+    sport_type: meta.sportType,
+    gear_id: meta.gearId,
+    commute: meta.commute,
+    trainer: meta.trainer,
+  };
+  return Object.fromEntries(
+    Object.entries(all).filter(([, value]) => value !== null),
+  ) as UpdateActivityFields;
 }
 
 export class MergeMachine {
@@ -245,7 +262,7 @@ export class MergeMachine {
     this.#clock = options.clock;
     this.#log = options.log?.child({ mod: "machine" });
     this.#metrics = options.metrics;
-    this.#poll = options.uploadPoll ?? {};
+    this.#poll = { ...options.uploadPoll };
     this.#noLoss = options.noLossCheck ?? checkNoLoss;
     this.#samples = new SampleCache(options.db, options.backup);
   }
@@ -302,8 +319,7 @@ export class MergeMachine {
       const appSide = activities.filter((a) => !fitbitSide.includes(a));
       const startMs = Math.min(...activities.map((a) => a.startMs));
       const id = groupIdFor(startMs, ids);
-      this.#db.exec("BEGIN");
-      try {
+      withTransaction(this.#db, () => {
         for (const old of overlapping) {
           patchGroup(this.#db, old.id, { status: "superseded" }, now);
           appendEvent(this.#db, old.id, now, old.status, "superseded", "superseded", { by: id });
@@ -318,11 +334,7 @@ export class MergeMachine {
           },
           now,
         );
-        this.#db.exec("COMMIT");
-      } catch (error) {
-        this.#db.exec("ROLLBACK");
-        throw error;
-      }
+      });
       created.push(id);
       this.#log?.info({ groupId: id, members: ids }, "candidate group detected");
     }
@@ -391,8 +403,7 @@ export class MergeMachine {
 
   async #transition(group: GroupRow, step: Step): Promise<void> {
     const now = this.#now();
-    this.#db.exec("BEGIN");
-    try {
+    withTransaction(this.#db, () => {
       patchGroup(this.#db, group.id, { ...step.patch, status: step.to, lastError: null }, now);
       appendEvent(
         this.#db,
@@ -403,12 +414,7 @@ export class MergeMachine {
         step.event,
         step.evidence ?? null,
       );
-      this.#db.exec("COMMIT");
-    } catch (error) {
-      /* v8 ignore next 2 -- a failing local SQLite write; nothing to recover */
-      this.#db.exec("ROLLBACK");
-      throw error;
-    }
+    });
     this.#log?.info(
       { groupId: group.id, from: group.status, to: step.to, event: step.event },
       "transition",
@@ -510,7 +516,8 @@ export class MergeMachine {
   approveReview(groupId: string, offsetSeconds = 0): void {
     const group = requireGroup(this.#db, groupId);
     if (group.status !== "review") throw new Error(`group ${groupId} is not in review`);
-    if (group.appIds.length === 0 || group.fitbitIds.length === 0) {
+    // Three sources (or none) have no app/wrist roles: the owner can only reject.
+    if ((group.match as { appIds: number[] }).appIds.length === 0) {
       throw new Error(`group ${groupId} has no two-sided structure to merge`);
     }
     const now = this.#now();
@@ -602,11 +609,11 @@ export class MergeMachine {
 
   async #stepBackup(group: GroupRow): Promise<Step> {
     const outcomes = [];
+    const gone = this.#members(group).find((id) => requireActivity(this.#db, id).goneAt !== null);
+    if (gone !== undefined)
+      return { to: "dissolved", event: "member_gone", evidence: { id: gone } };
     for (const id of this.#members(group)) {
       const activity = requireActivity(this.#db, id);
-      if (activity.goneAt !== null) {
-        return { to: "dissolved", event: "member_gone", evidence: { id } };
-      }
       if (activity.originalStatus === "pending" && !this.#web.available())
         throw new Wait("web_paused");
       const outcome = await this.#backup.backupActivity(id);
@@ -663,9 +670,7 @@ export class MergeMachine {
   async #stepBuild(group: GroupRow): Promise<Step> {
     const app = await this.#samples.concat(group.appIds);
     const fitbit = await this.#samples.concat(group.fitbitIds);
-    const sport =
-      requireActivity(this.#db, this.#primary(group.appIds)).sportType ??
-      requireActivity(this.#db, this.#primary(group.fitbitIds)).sportType;
+    const sport = requireActivity(this.#db, this.#primary(group.appIds)).sportType;
     const built = buildMerge(
       {
         app,
@@ -983,27 +988,21 @@ export class MergeMachine {
     return this.#apiWrite(group, kind, target, () => this.#web.run(write));
   }
 
+  /** Latest backed-up API detail; every member was backed up before any write. */
+  async #detail(id: number): Promise<StravaDetailedActivity> {
+    return (await this.#backup.latestJson<StravaDetailedActivity>(id, "metadata"))!;
+  }
+
   async #applyMetadata(group: GroupRow): Promise<unknown> {
     const merged = group.mergedActivityId as number;
-    const appId = this.#primary(group.appIds);
-    const fitbitId = this.#primary(group.fitbitIds);
-    const appDetail = await this.#backup.latestJson<StravaDetailedActivity>(appId, "metadata");
-    const fitbitDetail = await this.#backup.latestJson<StravaDetailedActivity>(
-      fitbitId,
-      "metadata",
-    );
+    const appDetail = await this.#detail(this.#primary(group.appIds));
+    const fitbitDetail = await this.#detail(this.#primary(group.fitbitIds));
     const meta = mergeMetadata(metadataOf(appDetail), metadataOf(fitbitDetail));
-    const fields: UpdateActivityFields = {};
-    if (meta.name !== null) fields.name = meta.name;
-    if (meta.description !== null) fields.description = meta.description;
-    if (meta.sportType !== null) fields.sport_type = meta.sportType;
-    if (meta.gearId !== null) fields.gear_id = meta.gearId;
-    if (meta.commute !== null) fields.commute = meta.commute;
-    if (meta.trainer !== null) fields.trainer = meta.trainer;
+    const fields = updateFields(meta);
     await this.#apiWrite(group, "update", merged, () => this.#api.updateActivity(merged, fields));
 
     const forms: EditFormValues[] = [];
-    for (const id of [...group.appIds, ...group.fitbitIds]) {
+    for (const id of this.#members(group)) {
       const form = await this.#backup.latestJson<EditFormValues>(id, "web_form");
       if (form !== null) forms.push(form);
     }
@@ -1021,36 +1020,43 @@ export class MergeMachine {
         ),
       );
     }
-    const photos = await this.#attachPhotos(group, merged, appDetail);
+    const athleteId = Number((appDetail.athlete as { id: number }).id);
+    const photos = await this.#attachPhotos(group, merged, athleteId);
     return {
       fields,
       conflicts: meta.conflicts,
       privateNoteMarked: true,
-      exertion: exertion?.perceivedExertion ?? null,
+      exertion: exertion === undefined ? null : exertion.perceivedExertion,
       photos,
       kudosAndComments: "archived in backup",
     };
   }
 
+  /**
+   * Re-attach every backed-up photo, best effort (L14). An attach that was
+   * sent is never repeated (it could duplicate the photo); a failure flags
+   * the pair and the photo stays archived in the backup.
+   */
   async #attachPhotos(
     group: GroupRow,
     merged: number,
-    appDetail: StravaDetailedActivity | null,
+    athleteId: number,
   ): Promise<{ attached: number; flagged: boolean }> {
-    const athleteId = Number((appDetail?.athlete as { id?: unknown } | undefined)?.id ?? 0);
     const previous = writesFor(this.#db, { groupId: group.id, kind: "photo" });
     let attached = 0;
     let flagged = group.photosFlagged;
     for (const id of this.#members(group)) {
-      const list = (await this.#backup.latestJson<StravaPhoto[]>(id, "photos_list")) ?? [];
-      const startMs = requireActivity(this.#db, id).startMs;
+      const list = (await this.#backup.latestJson<StravaPhoto[]>(id, "photos_list"))!;
       for (const file of this.#backup.photoFiles(id)) {
         const key = `${id}:${file.uniqueId}`;
         if (previous.some((w) => w.externalId === key)) continue;
         this.#assertWritable();
+        if (!this.#web.available()) throw new WebPausedError("web actions are paused");
         const listed = list.find((p) => String(p.unique_id) === file.uniqueId);
         const takenAt = new Date(
-          typeof listed?.created_at === "string" ? Date.parse(listed.created_at) : startMs,
+          typeof listed?.created_at === "string"
+            ? listed.created_at
+            : requireActivity(this.#db, id).startMs,
         );
         const writeId = beginWrite(
           this.#db,
@@ -1068,7 +1074,6 @@ export class MergeMachine {
           if (!result.verified) flagged = true;
         } catch (error) {
           finishWrite(this.#db, writeId, "failed", { error: message(error) }, this.#now());
-          if (error instanceof WebPausedError) throw error;
           flagged = true;
         }
       }
@@ -1122,9 +1127,6 @@ export class MergeMachine {
     this.#assertWritable();
     const permit = this.#permit(group);
     if (permit === null) throw new Wait("deletion_switch_off");
-    if (requireActivity(this.#db, id).originalStatus !== "present") {
-      throw new Park("original_missing", null);
-    }
     if (permit === "trial" && !requireGroup(this.#db, group.id).trial) {
       patchGroup(this.#db, group.id, { trial: true }, this.#now());
     }
@@ -1161,7 +1163,9 @@ export class MergeMachine {
       });
       throw new Wait("deletion_refused");
     }
+    // Re-check the freeze and the owner's go-ahead right before the write.
     this.#assertWritable();
+    if (this.#permit(group) === null) throw new Wait("deletion_switch_off");
     const writeId = beginWrite(
       this.#db,
       { groupId: group.id, kind: "delete", targetId: id },
@@ -1268,16 +1272,14 @@ export class MergeMachine {
       return { status: "restored", newId: activity.restoredAs, flags: [] };
     const original = await this.#backup.readOriginal(activityId);
     if (original === null) return this.#flagRestore(activityId, "no_original_in_backup");
-    const detail = await this.#backup.latestJson<StravaDetailedActivity>(activityId, "metadata");
-    const externalId =
-      typeof detail?.external_id === "string" && detail.external_id !== ""
-        ? detail.external_id
-        : `cameld-restore-${activityId}`;
+    const detail = await this.#detail(activityId);
+    // Re-use the original external id so the restored copy keeps its source fingerprint.
+    const externalId = activity.externalId ?? `cameld-restore-${activityId}`;
     const result = await this.#upload(groupId, "restore_upload", activityId, {
       file: original.bytes,
       dataType: original.dataType,
       externalId,
-      ...(detail?.name === undefined ? {} : { name: detail.name }),
+      name: detail.name,
     });
     if (result.kind !== "ready") {
       return this.#flagRestore(
@@ -1311,7 +1313,7 @@ export class MergeMachine {
     groupId: string | null,
     oldId: number,
     newId: number,
-    detail: StravaDetailedActivity | null,
+    detail: StravaDetailedActivity,
   ): Promise<string[]> {
     const flags: string[] = [];
     const journal = async (kind: WriteKind, write: () => Promise<unknown>): Promise<void> => {
@@ -1324,15 +1326,8 @@ export class MergeMachine {
         flags.push(`${kind}: ${message(error)}`);
       }
     };
-    const meta = metadataOf(detail);
-    const fields: UpdateActivityFields = {};
-    if (meta.name !== null) fields.name = meta.name;
-    if (meta.description !== null) fields.description = meta.description;
-    if (meta.sportType !== null) fields.sport_type = meta.sportType;
-    if (meta.gearId !== null) fields.gear_id = meta.gearId;
-    if (meta.commute !== null) fields.commute = meta.commute;
-    if (meta.trainer !== null) fields.trainer = meta.trainer;
-    if (typeof detail?.hide_from_home === "boolean") fields.hide_from_home = detail.hide_from_home;
+    const fields = updateFields(metadataOf(detail));
+    if (typeof detail.hide_from_home === "boolean") fields.hide_from_home = detail.hide_from_home;
     await journal("restore_update", () => this.#api.updateActivity(newId, fields));
     const form = await this.#backup.latestJson<EditFormValues>(oldId, "web_form");
     if (form === null) {
@@ -1431,11 +1426,6 @@ export class MergeMachine {
       per_page: 200,
     });
     return activities.find((a) => sameExternalId(a.external_id, externalId))?.id ?? null;
-  }
-
-  /** For the UI and tests. */
-  group(groupId: string): GroupRow {
-    return requireGroup(this.#db, groupId);
   }
 
   activity(id: number) {

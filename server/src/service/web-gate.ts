@@ -45,10 +45,6 @@ export class WebGate {
     this.#metrics?.setWebLogin(this.#healthy);
   }
 
-  get configured(): boolean {
-    return this.#session !== null;
-  }
-
   available(): boolean {
     return this.#session !== null && this.#healthy;
   }
@@ -90,7 +86,7 @@ export class WebGate {
   async run<T>(action: (session: StravaWebSession) => Promise<T>): Promise<T> {
     const session = this.#session;
     if (session === null || !this.#healthy) {
-      throw new WebPausedError(`web actions are paused (${this.#reason ?? "unknown"})`);
+      throw new WebPausedError(`web actions are paused (${String(this.#reason)})`);
     }
     try {
       return await action(session);
@@ -131,7 +127,7 @@ export class WebGate {
         this.#log?.warn({ err: error }, "automatic web login failed");
       }
     }
-    await this.#markUnhealthy(health.reason ?? "unknown");
+    await this.#markUnhealthy(String(health.reason));
     return health;
   }
 }

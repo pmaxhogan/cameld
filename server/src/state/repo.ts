@@ -60,6 +60,19 @@ function toActivity(row: Row): ActivityRow {
   };
 }
 
+/** Run fn in one transaction: all of it commits, or none of it. */
+export function withTransaction<T>(db: DatabaseSync, fn: () => T): T {
+  db.exec("BEGIN");
+  try {
+    const result = fn();
+    db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 export function isMergeExternalId(externalId: string | null | undefined): boolean {
   return typeof externalId === "string" && externalId.startsWith(MERGE_EXTERNAL_ID_PREFIX);
 }
@@ -140,7 +153,6 @@ export function setActivityFields(
   fields: Partial<Record<string, SQLInputValue>>,
 ): void {
   const keys = Object.keys(fields);
-  if (keys.length === 0) return;
   const sets = keys.map((key) => `${key} = ?`).join(", ");
   db.prepare(`UPDATE activities SET ${sets} WHERE id = ?`).run(
     ...keys.map((key) => fields[key] as SQLInputValue),
@@ -188,14 +200,16 @@ export const TERMINAL_STATUSES: readonly GroupStatus[] = [
   "superseded",
 ];
 
-/** Statuses before any Strava write: a later arrival may still regroup these. */
+/**
+ * Statuses well before any Strava write: a later arrival may still regroup
+ * these. "snapshotted" is excluded because its upload may be in flight.
+ */
 export const PRE_WRITE_STATUSES: readonly GroupStatus[] = [
   "detected",
   "backed_up",
   "review",
   "scored",
   "built",
-  "snapshotted",
 ];
 
 export type MergePath = "A" | "B";
@@ -301,26 +315,6 @@ export function listGroups(db: DatabaseSync, statuses?: readonly GroupStatus[]):
           .all(...statuses)
   ) as Row[];
   return rows.map(toGroup);
-}
-
-/** Groups (not terminal) that contain the activity. */
-export function openGroupsOf(db: DatabaseSync, activityId: number): GroupRow[] {
-  return listGroups(db).filter(
-    (group) =>
-      !TERMINAL_STATUSES.includes(group.status) &&
-      [...group.appIds, ...group.fitbitIds].includes(activityId),
-  );
-}
-
-/** Groups that merged the activity (done) or are past their first write. */
-export function mergedOrWrittenGroupsOf(db: DatabaseSync, activityId: number): GroupRow[] {
-  return listGroups(db).filter(
-    (group) =>
-      !["dissolved", "superseded"].includes(group.status) &&
-      !PRE_WRITE_STATUSES.includes(group.status) &&
-      group.status !== "parked" &&
-      [...group.appIds, ...group.fitbitIds].includes(activityId),
-  );
 }
 
 const GROUP_COLUMNS: Record<string, string> = {
