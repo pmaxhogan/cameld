@@ -15,3 +15,4 @@ export * from "./match/matcher.ts";
 export * from "./merge/ledger.ts";
 export * from "./merge/merger.ts";
 export * from "./merge/no-loss.ts";
+export * from "./api.ts";
