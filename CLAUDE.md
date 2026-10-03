@@ -14,7 +14,7 @@ npm run coverage:ratchet     fail if coverage dropped more than 0.5 points
 npm run coverage:ratchet:write   rewrite coverage-baseline.json (own chore commit)
 npm run lint                 eslint + scripts/check-ascii.mjs
 npm run format:check         prettier
-npm run typecheck            builds shared, then tsc/vue-tsc in every workspace
+npm run typecheck            builds shared (and server, for the e2e seed), then tsc/vue-tsc everywhere
 npm run build                shared -> server -> web
 npm run test:e2e             Playwright smoke suite against the built server
 ```

@@ -28,7 +28,7 @@
     "lint:ascii": "node scripts/check-ascii.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "npm run build -w shared && npm run typecheck -w shared && npm run typecheck -w server && npm run typecheck -w web && npm run typecheck -w e2e && npm run typecheck -w relay",
+    "typecheck": "npm run build -w shared && npm run typecheck -w shared && npm run typecheck -w server && npm run typecheck -w web && npm run build -w server && npm run typecheck -w e2e && npm run typecheck -w relay",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
