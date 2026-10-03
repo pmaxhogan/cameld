@@ -24,7 +24,7 @@ import {
   readValues,
   setEntry,
 } from "../src/web/forms.ts";
-import { parseUploadTarget } from "../src/web/session.ts";
+import { deletionConfirmed, parseUploadTarget } from "../src/web/session.ts";
 
 const BASE = "https://www.example.test";
 
@@ -261,5 +261,16 @@ describe("DeletionAuthorization", () => {
         "not a DeletionAuthorization",
       );
     }
+  });
+});
+
+describe("deletionConfirmed", () => {
+  it("accepts 404 or a known post-delete page, nothing else", () => {
+    expect(deletionConfirmed(404, "/activities/7000002")).toBe(true);
+    expect(deletionConfirmed(200, "/athlete/training")).toBe(true);
+    expect(deletionConfirmed(200, "/dashboard")).toBe(true);
+    expect(deletionConfirmed(200, "/activities/7000002")).toBe(false);
+    expect(deletionConfirmed(200, "/features")).toBe(false);
+    expect(deletionConfirmed(500, "/dashboard")).toBe(false);
   });
 });

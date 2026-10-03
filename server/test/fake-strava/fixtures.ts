@@ -31,6 +31,8 @@ export interface FakeActivity {
   photos: FakePhoto[];
   original: { filename: string; contentType: string; bytes: Buffer };
   gpx: string;
+  /** Test hook: once deleted, the activity URL redirects to an unrelated page. */
+  redirectWhenGone?: boolean;
 }
 
 /** A short synthetic GPX track in open ocean beside Null Island. */

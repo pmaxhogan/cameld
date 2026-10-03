@@ -31,6 +31,14 @@ export type FakeMode =
   | "patch_side_effect"
   /** DELETE answers like a success but the activity stays. */
   | "keep_after_delete"
+  /** DELETE answers 500 and deletes nothing. */
+  | "delete_fails"
+  /** DELETE succeeds, then every session expires (the check hits /login). */
+  | "expire_after_delete"
+  /** DELETE succeeds, then the check is challenged with a captcha. */
+  | "captcha_after_delete"
+  /** DELETE succeeds, then the activity URL redirects to an unrelated page. */
+  | "odd_redirect_after_delete"
   /** The edit page has no csrf-token meta tag (the form token is used). */
   | "no_meta"
   /** The dashboard answers 500. */
@@ -282,6 +290,10 @@ export async function startFakeStrava(): Promise<FakeStrava> {
 
   function activityOr404(id: string, reply: FastifyReply): FakeActivity | null {
     const activity = fake.activities.get(Number(id));
+    if (activity?.redirectWhenGone === true) {
+      void reply.redirect("/features");
+      return null;
+    }
     if (activity === undefined || !activity.exists) {
       void reply
         .code(404)
@@ -373,7 +385,11 @@ export async function startFakeStrava(): Promise<FakeStrava> {
       return reply.code(422).type("text/html").send("<html><body>Invalid token</body></html>");
     const method = last(entries, "_method");
     if (method === "delete") {
+      if (fake.mode === "delete_fails") return reply.code(500).type("text/plain").send("oops");
       if (fake.mode !== "keep_after_delete") activity.exists = false;
+      if (fake.mode === "expire_after_delete") sessions.clear();
+      if (fake.mode === "captcha_after_delete") fake.mode = "captcha";
+      if (fake.mode === "odd_redirect_after_delete") activity.redirectWhenGone = true;
       return reply.redirect("/athlete/training");
     }
     if (method === "patch") {
@@ -385,6 +401,10 @@ export async function startFakeStrava(): Promise<FakeStrava> {
     }
     return reply.code(400).send("unknown _method");
   });
+
+  app.get("/features", (_request, reply) =>
+    reply.type("text/html").send(layout("Features", "<h1>Features</h1>", null)),
+  );
 
   app.get("/athlete/training", (request, reply) => {
     const session = guard(request, reply);

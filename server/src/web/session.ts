@@ -8,6 +8,7 @@ import { classify, isLoginPath, looksLikeChallenge, parseContentDisposition } fr
 import { DeletionAuthorization } from "./deletion-authorization.ts";
 import {
   BrowserUnavailableError,
+  ChallengeError,
   DeletionNotConfirmedError,
   LoginRequiredError,
   WebSessionError,
@@ -464,7 +465,10 @@ export class WebSession implements StravaWebSession {
    * is sent (see deletion-authorization.ts); only the state machine mints it.
    * Sends `POST /activities/<id>` with `_method=delete` and the CSRF token,
    * never clicks a link, then confirms the activity answers 404 or redirects
-   * away. Throws DeletionNotConfirmedError when it still answers.
+   * to a known post-delete page. Throws DeletionNotConfirmedError when it
+   * still answers or lands anywhere else, and LoginRequiredError /
+   * ChallengeError (outcome UNKNOWN) when the check is sent to /login or
+   * challenged. Callers must also confirm via the API before recording it gone.
    */
   async deleteActivity(
     activityId: number,
@@ -478,11 +482,28 @@ export class WebSession implements StravaWebSession {
         { activityId, reason: authorization.reason, snapshot: authorization.snapshot },
         "deleting strava activity",
       );
-      await this.#submit(page, form, "delete", [], true);
       const path = `/activities/${activityId}`;
-      const check = await this.#fetch(page, "GET", path, { kind: "none" }, {}, true);
-      const stillThere = check.status !== 404 && new URL(check.url).pathname === path;
-      if (stillThere) throw new DeletionNotConfirmedError(activityId);
+      let check: Fetched;
+      try {
+        await this.#submit(page, form, "delete", [], true);
+        check = await this.#fetch(page, "GET", path, { kind: "none" }, {}, true);
+      } catch (error) {
+        // Expired or challenged once the delete was sent (its own redirect or
+        // the check): the outcome is UNKNOWN. Never report it as confirmed.
+        if (error instanceof LoginRequiredError)
+          throw new LoginRequiredError(
+            `delete of activity ${activityId} sent but unconfirmed: login required`,
+            { cause: error },
+          );
+        if (error instanceof ChallengeError)
+          throw new ChallengeError(
+            error.kind,
+            `delete of activity ${activityId} sent but unconfirmed: ${error.message}`,
+          );
+        throw error;
+      }
+      if (!deletionConfirmed(check.status, new URL(check.url).pathname))
+        throw new DeletionNotConfirmedError(activityId);
       this.#log?.warn({ activityId }, "strava activity deleted");
       return { activityId, confirmedAt: this.#clock.now() };
     });
@@ -666,6 +687,19 @@ export class WebSession implements StravaWebSession {
     if (error !== null) throw error;
     return { status: response.status, url: response.url, headers: response.headers, bytes };
   }
+}
+
+/** Pages Strava sends a logged-in browser to once an activity is gone. */
+export const POST_DELETE_PATHS: readonly string[] = ["/athlete/training", "/dashboard"];
+
+/**
+ * Deleted = the activity URL answers 404, or redirects (logged in) to a known
+ * post-delete page. Login and challenge redirects are rejected before this.
+ * Anything else (the activity page itself, an unknown page) is not proof.
+ */
+export function deletionConfirmed(status: number, finalPath: string): boolean {
+  if (status === 404) return true;
+  return status >= 200 && status < 300 && POST_DELETE_PATHS.includes(finalPath);
 }
 
 function healthReason(error: WebSessionError): HealthReason {

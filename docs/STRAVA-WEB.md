@@ -101,8 +101,13 @@ cookies alive (an integration test checks this).
   request then fails.
 
 The delete is `POST /activities/<id>` with `_method=delete`, then
-`GET /activities/<id>` must answer 404 or redirect elsewhere, else
-`DeletionNotConfirmedError`.
+`GET /activities/<id>` must answer 404 or redirect (still logged in) to a
+known post-delete page (`/athlete/training`, `/dashboard`); anything else is
+`DeletionNotConfirmedError`. If that check is sent to `/login` or
+challenged, the delete was sent but its outcome is UNKNOWN:
+`LoginRequiredError` / `ChallengeError` with "sent but unconfirmed", never
+success. The state machine must ALSO confirm deletion through the API
+(`GET /api/v3/activities/{id}` -> 404) before recording an activity as gone.
 
 ### Unverified until the first live session
 

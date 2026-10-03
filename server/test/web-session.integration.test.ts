@@ -375,6 +375,33 @@ describe("delete", () => {
     expect(fake.activities.get(RUN_ID)?.exists).toBe(true);
   });
 
+  it.each([
+    ["expire_after_delete", LoginRequiredError],
+    ["captcha_after_delete", ChallengeError],
+  ] as const)("reports an unknown outcome, not success, for %s", async (mode, type) => {
+    fake.mode = mode;
+    const error = await open()
+      .deleteActivity(RIDE_ID, authorize(RIDE_ID))
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(type);
+    expect((error as Error).message).toMatch(/sent but unconfirmed/);
+  });
+
+  it("does not take a redirect to an unrelated page as proof", async () => {
+    fake.mode = "odd_redirect_after_delete";
+    await expect(open().deleteActivity(RIDE_ID, authorize(RIDE_ID))).rejects.toBeInstanceOf(
+      DeletionNotConfirmedError,
+    );
+  });
+
+  it("passes other failures of the delete request through", async () => {
+    fake.mode = "delete_fails";
+    await expect(open().deleteActivity(RIDE_ID, authorize(RIDE_ID))).rejects.toBeInstanceOf(
+      WebUnexpectedResponseError,
+    );
+    expect(fake.activities.get(RIDE_ID)?.exists).toBe(true);
+  });
+
   it("throws when the activity survives the delete", async () => {
     fake.mode = "keep_after_delete";
     await expect(open().deleteActivity(RIDE_ID, authorize(RIDE_ID))).rejects.toBeInstanceOf(
