@@ -39,6 +39,8 @@ export const envSchema = z.object({
 
   STRAVA_CLIENT_ID: optionalString,
   STRAVA_CLIENT_SECRET: optionalString,
+  /** Seed refresh token for the first run only; afterwards the rotated one lives in SQLite. */
+  STRAVA_REFRESH_TOKEN: optionalString,
   STRAVA_WEB_EMAIL: optionalString,
   STRAVA_WEB_PASSWORD: optionalString,
 
@@ -83,6 +85,7 @@ export interface Config {
   strava: {
     clientId: string | undefined;
     clientSecret: string | undefined;
+    initialRefreshToken: string | undefined;
     webEmail: string | undefined;
     webPassword: string | undefined;
   };
@@ -146,6 +149,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     strava: {
       clientId: env.STRAVA_CLIENT_ID,
       clientSecret: env.STRAVA_CLIENT_SECRET,
+      initialRefreshToken: env.STRAVA_REFRESH_TOKEN,
       webEmail: env.STRAVA_WEB_EMAIL,
       webPassword: env.STRAVA_WEB_PASSWORD,
     },

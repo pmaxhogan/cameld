@@ -60,3 +60,44 @@ describe("web serving", () => {
     expect(response.statusCode).toBe(404);
   });
 });
+
+describe("metrics and read-only data routes", () => {
+  it("serves /metrics and the data endpoints only when wired, and nothing writable", async () => {
+    const { Metrics } = await import("../src/service/metrics.ts");
+    const metrics = new Metrics({
+      defaultMetrics: false,
+      sources: {
+        parkedByReason: () => ({}),
+        frozen: () => false,
+        rateUsage: () => null,
+        backupTotals: () => ({ bytes: 0, files: 0 }),
+        backfill: () => ({ activities: 0, cursorMs: null, done: false, readsToday: 0 }),
+      },
+    });
+    const app = await buildApp({
+      config: { version: "1.0.0", webDistDir: join(tmpdir(), "does-not-exist") },
+      log,
+      metrics,
+      data: { backfillReport: () => ({ groups: [] }), status: () => ({ frozen: false }) },
+    });
+    apps.push(app);
+    const scraped = await app.inject({ method: "GET", url: "/metrics" });
+    expect(scraped.statusCode).toBe(200);
+    expect(scraped.headers["content-type"]).toContain("text/plain");
+    expect(scraped.body).toContain("cameld_writes_frozen 0");
+    expect((await app.inject({ method: "GET", url: "/api/backfill/report" })).json()).toEqual({
+      groups: [],
+    });
+    expect((await app.inject({ method: "GET", url: "/api/status" })).json()).toEqual({
+      frozen: false,
+    });
+    expect((await app.inject({ method: "POST", url: "/api/status" })).statusCode).toBe(404);
+
+    const bare = await buildApp({
+      config: { version: "1.0.0", webDistDir: join(tmpdir(), "does-not-exist") },
+      log,
+    });
+    apps.push(bare);
+    expect((await bare.inject({ method: "GET", url: "/metrics" })).statusCode).toBe(404);
+  });
+});

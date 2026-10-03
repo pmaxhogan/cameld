@@ -4,10 +4,18 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
 import type { Config } from "./config.ts";
 import type { Logger } from "./logging.ts";
+import type { Metrics } from "./service/metrics.ts";
 
 export interface AppDeps {
   config: Pick<Config, "version" | "webDistDir">;
   log: Logger;
+  /** Prometheus metrics, served on /metrics. */
+  metrics?: Metrics;
+  /** Read-only data for the UI. No route here writes anything (no auth until the UI wave). */
+  data?: {
+    backfillReport(): unknown;
+    status(): unknown;
+  };
 }
 
 /**
@@ -23,6 +31,19 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
 
   app.get("/healthz", (): Health => ({ ok: true, version: deps.config.version }));
+
+  const metrics = deps.metrics;
+  if (metrics !== undefined) {
+    app.get("/metrics", async (_request, reply) => {
+      const body = await metrics.render();
+      return reply.type(metrics.contentType).send(body);
+    });
+  }
+  const data = deps.data;
+  if (data !== undefined) {
+    app.get("/api/backfill/report", () => data.backfillReport());
+    app.get("/api/status", () => data.status());
+  }
 
   const indexHtml = `${deps.config.webDistDir}/index.html`;
   if (existsSync(indexHtml)) {
