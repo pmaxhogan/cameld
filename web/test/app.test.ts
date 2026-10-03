@@ -1,51 +1,131 @@
-import { flushPromises, mount } from "@vue/test-utils";
-import PrimeVue from "primevue/config";
+import { flushPromises } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App.vue";
+import { status, statusError } from "../src/status.ts";
+import { apiStatus, groupDetail, settings } from "./fixtures.ts";
+import { byTestId, click, mountUi, stubApi, type Reply } from "./helpers.ts";
 
-const remove = vi.fn();
-const createMap = vi.fn(() => ({ remove }));
-vi.mock("../src/map.ts", () => ({ createMap: () => createMap() }));
+vi.mock("maplibre-gl", () => ({
+  Map: class {
+    on(): void {}
+    remove(): void {}
+  },
+}));
 
+let unmount: (() => void) | null = null;
 afterEach(() => {
+  unmount?.();
+  unmount = null;
   vi.unstubAllGlobals();
-  vi.clearAllMocks();
+  vi.useRealTimers();
+  status.value = null;
+  statusError.value = null;
+  location.hash = "";
 });
 
-function stubFetch(impl: () => Promise<unknown>): void {
-  vi.stubGlobal("fetch", vi.fn(impl));
+const ROUTES: Record<string, Reply> = {
+  "GET /api/review": { body: [] },
+  "GET /api/groups": { body: [] },
+  "GET /api/groups/g-1": { body: groupDetail() },
+  "GET /api/backfill": { body: apiStatus().backfill },
+  "GET /api/backfill/report": { body: { generatedAt: 0, progress: {}, groups: [] } },
+  "GET /api/settings": { body: settings() },
+};
+
+async function mountApp(statusReply: Reply | (() => Reply) = { body: apiStatus() }) {
+  const api = stubApi({ ...ROUTES, "GET /api/status": statusReply });
+  const wrapper = mountUi(App);
+  unmount = () => wrapper.unmount();
+  await flushPromises();
+  return api;
+}
+
+async function go(hash: string): Promise<void> {
+  location.hash = hash;
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+  await flushPromises();
 }
 
 describe("App", () => {
-  it("shows the server version from /healthz and tears the map down", async () => {
-    stubFetch(() =>
-      Promise.resolve({ json: () => Promise.resolve({ ok: true, version: "1.2.3" }) }),
-    );
-    const wrapper = mount(App, { global: { plugins: [PrimeVue] } });
-    await flushPromises();
-    expect(wrapper.get("[data-testid=version]").text()).toBe("server 1.2.3");
-    expect(createMap).toHaveBeenCalledOnce();
-    wrapper.unmount();
-    expect(remove).toHaveBeenCalledOnce();
+  it("loads status into the header and shows the review queue by default", async () => {
+    await mountApp();
+    expect(byTestId("identity")?.textContent).toBe("test-owner");
+    expect(byTestId("version")?.textContent).toBe("v9.9.9");
+    for (const name of ["review", "history", "backfill", "settings", "browser"]) {
+      expect(byTestId(`nav-${name}`)?.getAttribute("href")).toBe(`#/${name}`);
+    }
+    expect(byTestId("nav-review")?.classList.contains("active")).toBe(true);
+    expect(byTestId("review-empty")).not.toBeNull();
+    expect(byTestId("frozen-banner")).toBeNull();
+    expect(byTestId("push-enable") ?? byTestId("push-unsupported")).toBeNull();
   });
 
-  it("reports an unreachable server", async () => {
-    stubFetch(() => Promise.reject(new Error("offline")));
-    const wrapper = mount(App, { global: { plugins: [PrimeVue] } });
-    await flushPromises();
-    expect(wrapper.get("[data-testid=version]").text()).toBe("server unreachable");
-  });
-
-  it("survives a map that cannot be created", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    createMap.mockImplementationOnce(() => {
-      throw new Error("no webgl");
+  it("shows the frozen banner and push controls", async () => {
+    await mountApp({
+      body: apiStatus({
+        frozen: { frozen: true, reason: "checksum mismatch", evidence: {}, frozenAt: 1 },
+        push: { configured: true, publicKey: null, subscriptions: 0 },
+      }),
     });
-    stubFetch(() => Promise.resolve({ json: () => Promise.resolve({ ok: false }) }));
-    const wrapper = mount(App, { global: { plugins: [PrimeVue] } });
+    expect(byTestId("frozen-banner")?.textContent).toContain("checksum mismatch");
+    expect(byTestId("push-unsupported")).not.toBeNull();
+  });
+
+  it("routes between every area", async () => {
+    await mountApp({
+      body: apiStatus({ push: { configured: true, publicKey: "AQID", subscriptions: 1 } }),
+    });
+    await go("#/history");
+    expect(byTestId("history-table")).not.toBeNull();
+    await go("#/history/g-1");
+    expect(byTestId("group-detail")).not.toBeNull();
+    await go("#/backfill");
+    expect(byTestId("backfill-progress")).not.toBeNull();
+    await go("#/settings");
+    expect(byTestId("settings-save")).not.toBeNull();
+    await go("#/browser");
+    expect(byTestId("browser-frame")).not.toBeNull();
+    expect(byTestId("nav-browser")?.classList.contains("active")).toBe(true);
+  });
+
+  it("shows a loading state and a status error", async () => {
+    await mountApp({ status: 500, body: { error: "db_down" } });
+    expect(byTestId("app-loading")).not.toBeNull();
+    expect(byTestId("status-error")?.textContent).toContain("db_down");
+  });
+
+  it("polls status every 30 s and after writes, and stops on unmount", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const statusReply = vi.fn(() => ({ body: apiStatus() }));
+    const { calls } = await mountApp(statusReply);
+    expect(statusReply).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(30_000);
     await flushPromises();
-    expect(wrapper.get("[data-testid=version]").text()).toBe("server unreachable");
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
+    expect(statusReply).toHaveBeenCalledTimes(2);
+    await go("#/browser");
+    stubApi({ "GET /api/status": statusReply, "POST /api/web/check": { body: {} } });
+    click("browser-check");
+    await flushPromises();
+    expect(statusReply).toHaveBeenCalledTimes(3);
+    expect(calls.length).toBeGreaterThan(0);
+    unmount?.();
+    unmount = null;
+    vi.advanceTimersByTime(60_000);
+    await flushPromises();
+    expect(statusReply).toHaveBeenCalledTimes(3);
+  });
+
+  it("logs out to the login page even when the call fails", async () => {
+    await mountApp();
+    const assign = vi.fn();
+    vi.stubGlobal("location", { assign, hash: "" });
+    stubApi({ "POST /api/auth/logout": { status: 204 }, "GET /api/status": { body: apiStatus() } });
+    click("logout");
+    await flushPromises();
+    expect(assign).toHaveBeenCalledWith("/login");
+    stubApi({ "POST /api/auth/logout": { status: 500, body: { error: "x" } } });
+    click("logout");
+    await flushPromises();
+    expect(assign).toHaveBeenCalledTimes(2);
   });
 });
