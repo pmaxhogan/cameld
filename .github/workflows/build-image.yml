@@ -91,7 +91,11 @@ jobs:
             sleep 2
           done
           docker exec cameld-smoke sh -c 'ls /ms-playwright | grep -i chromium'
-          docker exec cameld-smoke curl -fsS http://127.0.0.1:8080/ | grep -qi '<div id="app">'
+          # The SPA ships in the image, but with no auth configured every page is
+          # refused (the gates fail closed), so check the file and the 401.
+          docker exec cameld-smoke sh -c 'grep -qi "<div id=\"app\">" /app/web/dist/index.html'
+          status=$(docker exec cameld-smoke curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/)
+          test "$status" = "401"
           docker logs cameld-smoke
 
       - name: Tear down the smoke container
