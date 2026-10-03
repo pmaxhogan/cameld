@@ -2,7 +2,7 @@ import { type Browser, chromium } from "playwright-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { listGroups } from "../src/state/repo.ts";
 import { WebSession } from "../src/web/session.ts";
-import { type CdpChromium, launchCdpChromium } from "./fake-strava/chromium.ts";
+import { type CdpChromium, launchCdpChromium, settleWithin } from "./fake-strava/chromium.ts";
 import type { FakeActivity } from "./fake-strava/fixtures.ts";
 import { type FakeStrava, startFakeStrava } from "./fake-strava/server.ts";
 import type { WorldActivity } from "./fake-strava-api/world.ts";
@@ -54,7 +54,7 @@ beforeAll(async () => {
   const page = await context.newPage();
   await page.goto(web.sessionUrl);
   await page.close();
-}, 60_000);
+}, 120_000);
 
 afterEach(async () => {
   for (const session of sessions.splice(0)) await session.disconnect();
@@ -63,10 +63,10 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  await observer?.close();
-  await web?.close();
+  await settleWithin(observer?.close());
+  await settleWithin(web?.close());
   await chrome?.close();
-});
+}, 120_000);
 
 describe("state machine with the real web session", () => {
   it("runs path B: exports originals, deletes both through the web, confirms by API 404", async () => {

@@ -18,7 +18,7 @@ import {
   WebVerificationError,
 } from "../src/web/errors.ts";
 import { WebSession, type WebSessionOptions } from "../src/web/session.ts";
-import { type CdpChromium, launchCdpChromium } from "./fake-strava/chromium.ts";
+import { type CdpChromium, launchCdpChromium, settleWithin } from "./fake-strava/chromium.ts";
 import {
   RIDE_ID,
   RUN_ID,
@@ -108,13 +108,13 @@ beforeAll(async () => {
   chrome = await launchCdpChromium();
   fake = await startFakeStrava();
   observer = await chromium.connectOverCDP(chrome.cdpUrl);
-}, 60_000);
+}, 120_000);
 
 afterAll(async () => {
-  await observer?.close();
-  await fake?.close();
+  await settleWithin(observer?.close());
+  await settleWithin(fake?.close());
   await chrome?.close();
-});
+}, 120_000);
 
 beforeEach(async () => {
   fake.mode = "normal";

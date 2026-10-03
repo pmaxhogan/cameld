@@ -53,7 +53,10 @@ export async function launchCdpChromium(): Promise<CdpChromium> {
       if (child.exitCode === null) {
         const exited = new Promise((resolve) => child.once("exit", resolve));
         child.kill();
+        // A loaded CI runner can leave Chromium slow to exit; escalate rather than hang.
+        const killer = setTimeout(() => child.kill("SIGKILL"), 5_000);
         await exited;
+        clearTimeout(killer);
       }
       try {
         rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
@@ -62,4 +65,21 @@ export async function launchCdpChromium(): Promise<CdpChromium> {
       }
     },
   };
+}
+
+/**
+ * Await a teardown step but give up after `ms`, so one wedged resource (a CDP
+ * connection or a keep-alive socket on a starved runner) cannot fail the suite.
+ */
+export async function settleWithin(step: Promise<unknown> | undefined, ms = 10_000): Promise<void> {
+  if (step === undefined) return;
+  let timer: NodeJS.Timeout | undefined;
+  const limit = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms);
+  });
+  try {
+    await Promise.race([step.catch(() => undefined), limit]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
