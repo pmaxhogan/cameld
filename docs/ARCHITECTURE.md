@@ -93,6 +93,15 @@ it the result (upload id, activity id) is persisted. On resume the write is
 looked up on Strava before being repeated, so nothing is uploaded or deleted
 twice.
 
+Implementation (`server/src/state/`): every transition updates the group
+row and appends an event with its evidence. Every Strava write first commits
+an intent row (with the `external_id` for uploads) and then its result. On
+every tick `reconcile()` resolves open intents on Strava (an upload by its
+upload id, else the activity by `external_id`; a delete by GET -> 404). An
+upload rejected as a duplicate of an activity carrying the group's own
+`external_id` is the group's earlier upload, never a reason for Path B. The
+freeze and the owner's go-ahead are re-checked immediately before each delete.
+
 ### Rules for both paths
 
 - **Deletion switch.** Any step that deletes requires the deletion switch to
@@ -150,7 +159,10 @@ Deletion is disabled by default in the deployed service. The rollout is: full
 history backup, a dry-run report of every pair that would merge, a trial of
 three real pairs merged, verified, aged through the grace period and deleted
 (including restoring both originals of one pair from backup to prove restore
-works), then a hard stop until the owner explicitly enables deletion. While
+works), then a hard stop until the owner explicitly enables deletion. The trial is
+a separate setting (off by default) that permits deletion for at most three
+pairs while the deletion switch stays off; its tokens carry reason
+`rollout_trial`. While
 waiting, backfill may upload and hide only. After the go-ahead, backfill runs in
 daily batches inside the rate limits.
 
@@ -166,7 +178,16 @@ daily batches inside the rate limits.
   Snapshots are requested through a narrowly scoped TrueNAS API key (snapshot
   create on that dataset only) if the platform supports that scope, otherwise
   through a tiny host-side helper that snapshots on request
-  (`SNAPSHOT_HELPER_URL`). The choice is documented when implemented.
+  (`SNAPSHOT_HELPER_URL`). Implemented choice: the host-side helper.
+  `POST <SNAPSHOT_HELPER_URL>/snapshot` with JSON `{"label": "<a-z0-9_->"}`
+  answers 200 `{"snapshot": "<dataset>@<name>"}`; anything else means no
+  snapshot, and nothing is deleted. The helper snapshots one fixed dataset
+  and takes nothing else from the request (`server/src/service/snapshotter.ts`).
+- Layout under `<DATA_DIR>/backup/`: `activities/<id>/` holds content-addressed
+  `metadata/`, `kudos/`, `comments/`, `web-form/` (edit-form values only,
+  never tokens) and `photos/` files, plus `streams.json` and
+  `original/<file>`; `merges/<group>/` holds the merged FIT, its exclusion
+  ledger and the no-loss report. Every file is recorded in SQLite.
 
 ## 8. Platform
 
