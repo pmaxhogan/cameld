@@ -283,6 +283,17 @@ describe("DeletionAuthorization", () => {
     ).toThrow(/expired/);
   });
 
+  it("accepts the trial allowance only for a rollout trial deletion", () => {
+    const trial = DeletionAuthorization.mint(
+      { ...evidence, deletionSwitch: "trial", reason: "rollout_trial" },
+      NOW,
+    );
+    expect(trial.reason).toBe("rollout_trial");
+    expect(() => DeletionAuthorization.mint({ ...evidence, deletionSwitch: "trial" }, NOW)).toThrow(
+      "cannot authorize deletion: deletionSwitch",
+    );
+  });
+
   it("defaults the clock to now", () => {
     const auth = DeletionAuthorization.mint({ ...evidence, backupVerifiedAt: Date.now() - 1 });
     DeletionAuthorization.consume(auth, 7000002);

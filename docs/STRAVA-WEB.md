@@ -106,7 +106,9 @@ cookies alive (an integration test checks this).
 
 - the constructor is private, and ESLint (`no-restricted-syntax`) rejects the
   `mint` call anywhere except `server/src/state/**` and tests;
-- the evidence demands `deletionSwitch: "on"`, `originalFileBackedUp: true`,
+- the evidence demands `deletionSwitch: "on"` (or `"trial"`, accepted only
+  with reason `rollout_trial`: the owner's separately switched allowance of
+  at most three trial pairs), `originalFileBackedUp: true`,
   a ZFS snapshot name and a backup verified within the last 15 minutes, all
   re-checked at runtime;
 - the token is branded with an ECMAScript private field (look-alike objects

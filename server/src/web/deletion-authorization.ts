@@ -11,7 +11,9 @@ import { DeletionUnauthorizedError } from "./errors.ts";
  *   `DeletionAuthorization.mint(evidence)`, and ESLint (`no-restricted-syntax`
  *   in eslint.config.js) rejects that call anywhere outside
  *   `server/src/state/**` and the tests.
- * - The evidence type demands literal proofs (`deletionSwitch: "on"`,
+ * - The evidence type demands literal proofs (`deletionSwitch: "on"`, or
+ *   `"trial"` for one of the owner's rollout trial pairs, which must carry
+ *   reason `rollout_trial`;
  *   `originalFileBackedUp: true`, a snapshot name, a fresh backup time) and
  *   mint re-checks them at runtime, so a cast cannot skip them.
  * - The class carries an ECMAScript private brand, so a structurally similar
@@ -25,8 +27,12 @@ export type DeletionReason = "path_a_grace_elapsed" | "path_b_duplicate_rejected
 
 export interface DeletionEvidence {
   activityId: number;
-  /** The owner's deletion switch. Only "on" is accepted. */
-  deletionSwitch: "on";
+  /**
+   * The owner's go-ahead: "on" is the deletion switch; "trial" is the
+   * separately switched rollout trial allowance (at most three pairs) and is
+   * only accepted with reason "rollout_trial".
+   */
+  deletionSwitch: "on" | "trial";
   /** The original uploaded file is in the backup. */
   originalFileBackedUp: true;
   /** Epoch ms at which the fresh pre-delete backup was read back and checksum-verified. */
@@ -70,7 +76,9 @@ export class DeletionAuthorization {
     const problems: string[] = [];
     if (!Number.isSafeInteger(evidence.activityId) || evidence.activityId <= 0)
       problems.push("activityId");
-    if (evidence.deletionSwitch !== "on") problems.push("deletionSwitch");
+    const permit = evidence.deletionSwitch;
+    if (permit !== "on" && !(permit === "trial" && evidence.reason === "rollout_trial"))
+      problems.push("deletionSwitch");
     if (evidence.originalFileBackedUp !== true) problems.push("originalFileBackedUp");
     if (typeof evidence.snapshot !== "string" || evidence.snapshot.trim() === "")
       problems.push("snapshot");
