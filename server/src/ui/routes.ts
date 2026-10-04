@@ -28,6 +28,7 @@ import {
   getGroup,
   groupEvents,
   listGroups,
+  originalCounts,
   trialPairsUsed,
   writesFor,
 } from "../state/repo.ts";
@@ -284,6 +285,7 @@ export function registerUiRoutes(api: FastifyInstance, deps: UiDeps): void {
       rate: deps.limiter?.usage() ?? null,
       backfill: backfillInfo(),
       counts,
+      originals: originalCounts(db, now()),
       trial: {
         enabled: settings.trial.enabled,
         maxPairs: settings.trial.maxPairs,

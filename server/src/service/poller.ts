@@ -101,10 +101,12 @@ export class Poller {
       const incomplete = db
         .prepare(
           `SELECT id FROM activities WHERE gone_at IS NULL AND is_merge_output = 0
-           AND (backed_up_at IS NULL OR original_status = 'pending' OR web_form_saved = 0)
+           AND (backed_up_at IS NULL OR web_form_saved = 0
+                OR (original_status = 'pending'
+                    AND (original_next_attempt_at IS NULL OR original_next_attempt_at <= ?)))
            ORDER BY start_ms DESC`,
         )
-        .all() as { id: number }[];
+        .all(now) as { id: number }[];
       const listedIds = new Set(ids);
       let retries = 0;
       for (const { id } of incomplete) {

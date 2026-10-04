@@ -1,9 +1,22 @@
+import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { writeFitActivity } from "@cameld/shared";
 import { afterEach, describe, expect, it } from "vitest";
-import { BackupService, dataTypeOf, parseOriginal, safeFilename } from "../src/service/backup.ts";
+import {
+  BackupService,
+  dataTypeOf,
+  noOriginalReason,
+  ORIGINAL_BACKOFF_BASE_MS,
+  ORIGINAL_BACKOFF_CAP_MS,
+  originalBackoffMs,
+  parseOriginal,
+  safeFilename,
+} from "../src/service/backup.ts";
 import { WebGate } from "../src/service/web-gate.ts";
-import { getActivity } from "../src/state/repo.ts";
+import { getActivity, originalCounts, requireActivity } from "../src/state/repo.ts";
+import type { StravaDetailedActivity } from "../src/strava/types.ts";
+import { WebNoFileError } from "../src/web/errors.ts";
+import type { StravaWebSession } from "../src/web/session.ts";
 import { SYNTHETIC_PNG } from "./fake-strava/fixtures.ts";
 import {
   addOuting,
@@ -81,7 +94,10 @@ describe("BackupService", () => {
       startMs: 1_580_608_922_000,
     });
     await h.backup.backupActivity(manual.id);
-    expect(getActivity(h.db, manual.id)?.originalStatus).toBe("none");
+    expect(getActivity(h.db, manual.id)?.originalStatus).toBe("unavailable");
+    expect(JSON.parse(getActivity(h.db, manual.id)?.originalEvidence ?? "")).toMatchObject({
+      reason: "export_not_found",
+    });
     expect(await h.backup.latestJson(manual.id, "streams")).toEqual({});
     expect(await h.backup.latestJson(manual.id, "nothing")).toBeNull();
     expect(await h.backup.readOriginal(manual.id)).toBeNull();
@@ -157,7 +173,7 @@ describe("BackupService", () => {
     });
     const outcome = await backup.backupActivity(single.id);
     expect(outcome).toMatchObject({ originalStatus: "pending", webFormSaved: false });
-    expect(lines.join("")).toContain("original export deferred");
+    expect(lines.join("")).toContain("original export failed; backing off");
     expect(lines.join("")).toContain("web form backup deferred");
   });
 
@@ -174,5 +190,205 @@ describe("BackupService", () => {
     expect(outcome.verified).toBe(false);
     expect(outcome.failures[0]).toMatch(/missing-file/);
     expect(await h.backup.verifyActivity(424242)).toEqual({ ok: false, failures: [] });
+  });
+});
+
+describe("original file exports", () => {
+  const exportCalls = (id: number): number =>
+    h.session.calls.filter((c) => c.op === "export_original" && c.id === id).length;
+  const MINUTE = 60 * 1000;
+
+  it("computes the backoff: 15 minutes doubling to a 24 hour cap", () => {
+    expect(originalBackoffMs(0)).toBe(ORIGINAL_BACKOFF_BASE_MS);
+    expect(originalBackoffMs(1)).toBe(15 * MINUTE);
+    expect(originalBackoffMs(2)).toBe(30 * MINUTE);
+    expect(originalBackoffMs(7)).toBe(16 * 60 * MINUTE);
+    expect(originalBackoffMs(8)).toBe(ORIGINAL_BACKOFF_CAP_MS);
+    expect(originalBackoffMs(500)).toBe(ORIGINAL_BACKOFF_CAP_MS);
+  });
+
+  it("reads 'no original' from the detail: manual, or an explicit null upload_id", () => {
+    const base = { id: 1, name: "x", sport_type: "Run" } as StravaDetailedActivity;
+    expect(noOriginalReason(null)).toBeNull();
+    expect(noOriginalReason(base)).toBeNull();
+    expect(noOriginalReason({ ...base, manual: false, upload_id: 7 })).toBeNull();
+    expect(noOriginalReason({ ...base, manual: true, upload_id: null })).toBe("manual");
+    expect(noOriginalReason({ ...base, manual: false, upload_id: null })).toBe("no_upload_id");
+  });
+
+  it("never exports a manual entry, and still backs up everything else", async () => {
+    h = await createHarness();
+    const manual = h.world.add({
+      name: "Synthetic manual walk",
+      sportType: "Walk",
+      startMs: 1_580_608_922_000,
+      manual: true,
+      photos: [{ uniqueId: "synthetic-manual-photo", bytes: SYNTHETIC_PNG, createdAt: "" }],
+      kudos: [{ firstname: "Synthetic", lastname: "Friend" }],
+      comments: [{ id: 1, text: "synthetic comment" }],
+      privateNote: "synthetic manual note",
+    });
+    const outcome = await h.backup.backupActivity(manual.id);
+    expect(outcome).toMatchObject({ originalStatus: "unavailable", verified: true });
+    expect(exportCalls(manual.id)).toBe(0);
+    const row = requireActivity(h.db, manual.id);
+    expect(row.originalNextAttemptAt).toBeNull();
+    expect(JSON.parse(row.originalEvidence ?? "")).toMatchObject({ reason: "manual" });
+    const kinds = (
+      h.db
+        .prepare("SELECT DISTINCT kind FROM backup_files WHERE activity_id = ? ORDER BY kind")
+        .all(manual.id) as { kind: string }[]
+    ).map((r) => r.kind);
+    expect(kinds).toEqual([
+      "comments",
+      "kudos",
+      "metadata",
+      "photo",
+      "photos_list",
+      "streams",
+      "web_form",
+    ]);
+    expect(await h.backup.latestJson(manual.id, "web_form")).toMatchObject({
+      privateNote: "synthetic manual note",
+    });
+    // Later passes never touch it again.
+    h.clock.t += ORIGINAL_BACKOFF_CAP_MS;
+    await h.poller.poll();
+    await h.backup.backupActivity(manual.id);
+    expect(exportCalls(manual.id)).toBe(0);
+    expect(originalCounts(h.db, h.clock.now()).unavailable).toBe(1);
+  });
+
+  it("marks an activity unavailable from stored metadata without a web session", async () => {
+    h = await createHarness({ session: null });
+    const manual = h.world.add({ name: "Synthetic manual", sportType: "Yoga", manual: true });
+    const outcome = await h.backup.backupActivity(manual.id);
+    expect(outcome.originalStatus).toBe("unavailable");
+  });
+
+  it("backs off a failing export, persists the next attempt and recovers", async () => {
+    h = await createHarness();
+    const single = addSingle(h.world, 0);
+    h.session.exportFails = true;
+    await h.poller.poll();
+    expect(exportCalls(single.id)).toBe(1);
+    let row = requireActivity(h.db, single.id);
+    expect(row).toMatchObject({ originalStatus: "pending", originalAttempts: 1 });
+    expect(row.originalNextAttemptAt).toBe(h.clock.now() + 15 * MINUTE);
+    expect(JSON.parse(row.originalEvidence ?? "")).toMatchObject({
+      reason: "transient",
+      error: "WebTimeoutError",
+      attempts: 1,
+    });
+    expect(originalCounts(h.db, h.clock.now())).toMatchObject({ pending: 1, backingOff: 1 });
+
+    // Within the backoff neither the poller nor a direct backup exports.
+    h.clock.t += 10 * MINUTE;
+    await h.poller.poll();
+    await h.backup.backupActivity(single.id);
+    expect(exportCalls(single.id)).toBe(1);
+
+    // After it, one more try that fails doubles the delay.
+    h.clock.t += 5 * MINUTE;
+    await h.poller.poll();
+    expect(exportCalls(single.id)).toBe(2);
+    row = requireActivity(h.db, single.id);
+    expect(row.originalAttempts).toBe(2);
+    expect(row.originalNextAttemptAt).toBe(h.clock.now() + 30 * MINUTE);
+
+    h.session.exportFails = false;
+    h.clock.t += 30 * MINUTE;
+    await h.poller.poll();
+    expect(exportCalls(single.id)).toBe(3);
+    row = requireActivity(h.db, single.id);
+    expect(row).toMatchObject({
+      originalStatus: "present",
+      originalAttempts: 0,
+      originalNextAttemptAt: null,
+      originalEvidence: null,
+    });
+    const metrics = await h.metrics.registry.getSingleMetricAsString(
+      "cameld_original_exports_total",
+    );
+    expect(metrics).toContain('result="failed"} 2');
+    expect(metrics).toContain('result="present"} 1');
+  });
+
+  it("leaves the backoff alone when the web session itself fails", async () => {
+    h = await createHarness();
+    const single = addSingle(h.world, 0);
+    h.session.loggedIn = false;
+    await h.backup.backupActivity(single.id);
+    expect(exportCalls(single.id)).toBe(1);
+    expect(requireActivity(h.db, single.id)).toMatchObject({
+      originalStatus: "pending",
+      originalAttempts: 0,
+      originalNextAttemptAt: null,
+    });
+    // The gate is now paused: no further export until it is healthy again.
+    await h.backup.backupActivity(single.id);
+    expect(exportCalls(single.id)).toBe(1);
+  });
+
+  it("records what an export answered instead of a file", async () => {
+    h = await createHarness();
+    const single = addSingle(h.world, 0);
+    const response = {
+      status: 200,
+      contentType: "text/html; charset=utf-8",
+      finalPath: `/activities/${single.id}`,
+      redirected: true,
+      size: 42,
+    };
+    const session = {
+      exportOriginal: (id: number) =>
+        Promise.reject(new WebNoFileError(`/activities/${id}/export_original`, response)),
+      getEditForm: (id: number) => h.session.getEditForm(id),
+    } as unknown as StravaWebSession;
+    const backup = new BackupService({
+      db: h.db,
+      api: h.client,
+      web: new WebGate({ session, notifier: new RecordingNotifier() }),
+      root: `${h.dir}/nofile`,
+      now: () => h.clock.now(),
+    });
+    await backup.backupActivity(single.id);
+    const row = requireActivity(h.db, single.id);
+    expect(row.originalStatus).toBe("pending");
+    expect(JSON.parse(row.originalEvidence ?? "")).toMatchObject({
+      reason: "transient",
+      error: "WebNoFileError",
+      response,
+    });
+    expect(new WebNoFileError("/x", { ...response, contentType: "" }).message).toContain(
+      "(200 no content type, final path",
+    );
+  });
+
+  it("caps original exports per rolling hour without counting it as a failure", async () => {
+    h = await createHarness();
+    const singles = [addSingle(h.world, 0), addSingle(h.world, 1), addSingle(h.world, 2)];
+    const backup = new BackupService({
+      db: h.db,
+      api: h.client,
+      web: h.web,
+      root: join(h.dir, "backup"),
+      now: () => h.clock.now(),
+      metrics: h.metrics,
+      exportsPerHour: 2,
+    });
+    for (const single of singles) await backup.backupActivity(single.id);
+    const statuses = singles.map((s) => requireActivity(h.db, s.id).originalStatus);
+    expect(statuses).toEqual(["present", "present", "pending"]);
+    expect(requireActivity(h.db, singles[2]!.id)).toMatchObject({
+      originalAttempts: 0,
+      originalNextAttemptAt: null,
+    });
+    expect(
+      await h.metrics.registry.getSingleMetricAsString("cameld_original_exports_total"),
+    ).toContain('result="capped"} 1');
+    h.clock.t += 60 * MINUTE + 1;
+    await backup.backupActivity(singles[2]!.id);
+    expect(requireActivity(h.db, singles[2]!.id).originalStatus).toBe("present");
   });
 });

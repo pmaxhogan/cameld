@@ -48,6 +48,7 @@ export function apiStatus(over: Partial<ApiStatus> = {}): ApiStatus {
     },
     backfill: backfillInfo(),
     counts: { done: 3, review: 1 },
+    originals: { present: 10, pending: 0, unavailable: 0, backingOff: 0 },
     trial: { enabled: false, maxPairs: 3, used: 0 },
     push: { configured: false, publicKey: null, subscriptions: 0 },
     map: { styleUrl: null },

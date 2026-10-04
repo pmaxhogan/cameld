@@ -33,6 +33,9 @@ function detail(a: WorldActivity, origin: string) {
     elapsed_time: a.elapsedSeconds,
     device_name: a.deviceName ?? undefined,
     external_id: a.externalId,
+    manual: a.manual,
+    // Like Strava: null for a manual entry, an upload id otherwise.
+    upload_id: a.manual ? null : a.id + 500_000,
     gear_id: a.gearId,
     // Like Strava, optional fields are sometimes absent rather than false.
     commute: a.commute || undefined,

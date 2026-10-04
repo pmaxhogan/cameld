@@ -92,7 +92,7 @@ describe("groupTracks", () => {
     expect(missing.notes.join(" ")).toMatch(/^merged:/);
 
     h.db
-      .prepare("UPDATE activities SET original_status = 'none' WHERE id = ?")
+      .prepare("UPDATE activities SET original_status = 'unavailable' WHERE id = ?")
       .run(outing.fitbit.id);
     const noWrist = await groupTracks(h.db, root, { ...group, mergedPath: null }, merge);
     expect(noWrist.fitbit).toBeNull();

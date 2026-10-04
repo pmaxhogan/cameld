@@ -29,6 +29,10 @@ export interface StravaDetailedActivity extends StravaSummaryActivity {
   description?: string | null;
   private_note?: string | null;
   photo_count?: number;
+  /** True for a manual entry (no recorded file). */
+  manual?: boolean;
+  /** Null when the activity was not created from an upload. */
+  upload_id?: number | null;
   laps?: StravaLap[];
   segment_efforts?: unknown[];
 }

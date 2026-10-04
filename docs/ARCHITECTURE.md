@@ -109,6 +109,8 @@ freeze and the owner's go-ahead are re-checked immediately before each delete.
   on. With it OFF, a pair that would need a delete is PARKED, never deleted.
 - **Original file is mandatory for deletion.** An activity may only be deleted
   if its original uploaded file is in the backup. No original file: park.
+  An activity Strava has no original for at all (`original_unavailable`, see
+  section 7) parks with that reason and is never deleted.
 - **Fresh backup before delete.** Immediately before any delete, take a fresh
   incremental backup of both originals (metadata, photos, kudos and comments
   may have changed), read it back, verify checksums, then snapshot.
@@ -170,6 +172,17 @@ daily batches inside the rate limits.
 
 - Every activity is backed up, paired or not: full metadata, all streams, the
   original uploaded file, photos, kudos and comments.
+- Original files come from the web export, which costs a strava.com page
+  request, so it is rationed. An activity Strava has no original for (the
+  stored API detail says `manual: true` or `upload_id: null`, or the export
+  answers 404) is marked `unavailable` with its evidence, is never exported
+  again, and is backed up from metadata and streams only. It can never be
+  deleted. Any other export failure keeps it `pending` and backs off
+  exponentially (15 minutes doubling to a 24 hour cap, next attempt time
+  persisted in SQLite); failures of the web session itself (logged out,
+  challenged) are left to the web gate and do not count. All exports share
+  a cap of 30 per rolling hour. The UI backfill page and
+  `cameld_original_files{status}` show the counts.
 - Backup files are write-once and checksummed, and are read back after
   writing.
 - The data lives on its own ZFS dataset. Snapshots are taken daily and kept
@@ -280,7 +293,8 @@ daily batches inside the rate limits.
 - **Observability.** Prometheus metrics, Grafana dashboard and alert rules,
   structured NDJSON logs shipped to Loki, and `GET /healthz` returning
   `{ok, version}`. Metrics: merges, parked pairs, frozen state, rate-limit
-  usage, backup size and count, last successful poll, web-session login health.
+  usage, backup size and count, original files by status and export outcomes,
+  last successful poll, web-session login health.
   Alerts: failed merge, frozen writes, login expired, polling stalled, backup
   write failure.
 - **Configuration.** `loadConfig(process.env)` is the only environment reader.

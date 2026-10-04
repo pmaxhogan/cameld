@@ -40,6 +40,30 @@ async function mountBackfill(
 }
 
 describe("BackfillView", () => {
+  it("explains activities without an original file and pending retries", async () => {
+    await mountBackfill(
+      apiStatus({ originals: { present: 40, pending: 3, unavailable: 7, backingOff: 2 } }),
+    );
+    expect(byTestId("originals-present")?.textContent).toContain("40");
+    expect(byTestId("originals-pending")?.textContent?.replace(/\s+/g, " ")).toContain(
+      "3 (2 waiting to retry after a failed export)",
+    );
+    expect(byTestId("originals-unavailable")?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "7 activities have no original file; they will be backed up from streams and never deleted.",
+    );
+  });
+
+  it("uses the singular for one activity and hides the note when there are none", async () => {
+    await mountBackfill(
+      apiStatus({ originals: { present: 1, pending: 0, unavailable: 1, backingOff: 0 } }),
+    );
+    expect(byTestId("originals-unavailable")?.textContent).toContain("1 activity has no original");
+    expect(byTestId("originals-pending")?.textContent?.trim()).toBe("0");
+    unmount?.();
+    await mountBackfill();
+    expect(byTestId("originals-unavailable")).toBeNull();
+  });
+
   it("shows budget, login health, progress and the dry-run report", async () => {
     await mountBackfill();
     const strava = byTestId("rate-budget")!.textContent;

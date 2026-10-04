@@ -118,6 +118,17 @@ export interface BackfillBatchInfo {
   finishedAt: number;
 }
 
+/** Original uploaded files of live activities, by status. */
+export interface OriginalsInfo {
+  present: number;
+  /** Not exported yet (includes backingOff). */
+  pending: number;
+  /** Strava has no original (manual entries): backed up from streams, never deleted. */
+  unavailable: number;
+  /** Pending activities waiting out a retry backoff after a failed export. */
+  backingOff: number;
+}
+
 /** GET /api/status */
 export interface ApiStatus {
   version: string;
@@ -131,6 +142,7 @@ export interface ApiStatus {
   rate: RateUsage | null;
   backfill: BackfillInfo;
   counts: Record<string, number>;
+  originals: OriginalsInfo;
   trial: { enabled: boolean; maxPairs: number; used: number };
   push: { configured: boolean; publicKey: string | null; subscriptions: number };
   map: { styleUrl: string | null };

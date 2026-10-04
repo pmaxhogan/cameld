@@ -83,9 +83,34 @@ export class WebNotFoundError extends WebSessionError {
 }
 
 export class WebUnexpectedResponseError extends WebSessionError {
-  override readonly name = "WebUnexpectedResponseError";
+  override readonly name: string = "WebUnexpectedResponseError";
   constructor(message: string) {
     super("unexpected_response", message);
+  }
+}
+
+/** What an export answered instead of a file (no body: it may hold page content). */
+export interface ExportResponseShape {
+  status: number;
+  contentType: string;
+  /** Path (no query) of the final URL after redirects. */
+  finalPath: string;
+  redirected: boolean;
+  size: number;
+}
+
+/**
+ * An export answered an HTML page or an empty body instead of a file. Carries
+ * the response shape so callers can log it and decide whether to retry.
+ */
+export class WebNoFileError extends WebUnexpectedResponseError {
+  override readonly name = "WebNoFileError";
+  readonly response: ExportResponseShape;
+  constructor(path: string, response: ExportResponseShape) {
+    super(
+      `${path} did not return a file (${response.status} ${response.contentType || "no content type"}, final path ${response.finalPath})`,
+    );
+    this.response = response;
   }
 }
 

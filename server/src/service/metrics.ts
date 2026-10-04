@@ -25,6 +25,8 @@ export interface MetricsSources {
   rateUsage(): RateLimitUsage | null;
   backupTotals(): { bytes: number; files: number };
   backfill(): BackfillProgress;
+  /** Original-file status counts (see repo.originalCounts). */
+  originals?(): { present: number; pending: number; unavailable: number; backingOff: number };
 }
 
 export interface MetricsOptions {
@@ -39,6 +41,7 @@ export class Metrics {
   readonly lastPoll: Gauge;
   readonly webLoginHealthy: Gauge;
   readonly backups: Counter<"result">;
+  readonly originalExports: Counter<"result">;
 
   constructor(options: MetricsOptions) {
     const { sources } = options;
@@ -57,6 +60,26 @@ export class Metrics {
       help: "Activity backups by result",
       labelNames: ["result"],
       registers,
+    });
+    this.originalExports = new Counter({
+      name: "cameld_original_exports_total",
+      help: "Original-file export outcomes: present, unavailable, failed (backing off) or capped",
+      labelNames: ["result"],
+      registers,
+    });
+    new Gauge({
+      name: "cameld_original_files",
+      help: "Activities by original-file status (unavailable: Strava has none, never deleted)",
+      labelNames: ["status"],
+      registers,
+      collect() {
+        const counts = sources.originals?.();
+        if (counts === undefined) return;
+        this.set({ status: "present" }, counts.present);
+        this.set({ status: "pending" }, counts.pending);
+        this.set({ status: "unavailable" }, counts.unavailable);
+        this.set({ status: "backing_off" }, counts.backingOff);
+      },
     });
     this.lastPoll = new Gauge({
       name: "cameld_last_successful_poll_timestamp_seconds",

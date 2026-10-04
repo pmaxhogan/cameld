@@ -17,7 +17,7 @@ import { HttpSnapshotter, UnavailableSnapshotter } from "./service/snapshotter.t
 import { WebGate } from "./service/web-gate.ts";
 import { FreezeStore } from "./state/freeze.ts";
 import { MergeMachine } from "./state/machine.ts";
-import { parkedByReason } from "./state/repo.ts";
+import { originalCounts, parkedByReason } from "./state/repo.ts";
 import { SettingsStore } from "./state/settings.ts";
 import { StravaClient } from "./strava/client.ts";
 import { RateLimiter, systemClock } from "./strava/rate-limiter.ts";
@@ -63,6 +63,7 @@ async function main(): Promise<void> {
       frozen: () => freeze.isFrozen(),
       rateUsage: () => limiter.usage(),
       backupTotals: () => backupTotals(),
+      originals: () => originalCounts(db, clock.now()),
       backfill: () =>
         backfill?.progress() ?? { activities: 0, cursorMs: null, done: false, readsToday: 0 },
     },

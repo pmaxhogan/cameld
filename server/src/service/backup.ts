@@ -10,13 +10,24 @@ import {
 } from "@cameld/shared";
 import { BackupIntegrityError, sha256Hex, verify, writeOnce } from "../backup-store.ts";
 import type { Logger } from "../logging.ts";
-import { getActivity, requireActivity, setActivityFields, upsertActivity } from "../state/repo.ts";
+import {
+  getActivity,
+  type OriginalStatus,
+  requireActivity,
+  setActivityFields,
+  upsertActivity,
+} from "../state/repo.ts";
 import { StravaApiError, type StravaClient } from "../strava/client.ts";
 import type { StravaDetailedActivity, StravaPhoto, UploadDataType } from "../strava/types.ts";
-import { WebNotFoundError } from "../web/errors.ts";
+import {
+  ChallengeError,
+  LoginRequiredError,
+  WebNoFileError,
+  WebNotFoundError,
+} from "../web/errors.ts";
 import type { ReadGate } from "./budget.ts";
 import type { Metrics } from "./metrics.ts";
-import type { WebGate } from "./web-gate.ts";
+import { type WebGate, WebPausedError } from "./web-gate.ts";
 
 /**
  * Activity backups (ARCHITECTURE.md section 7, rule L20): full metadata, all
@@ -32,6 +43,13 @@ import type { WebGate } from "./web-gate.ts";
  *   kudos/<sha16>.json, comments/<sha16>.json
  *   web-form/<sha16>.json   edit-form VALUES only (never tokens)
  *   original/<filename>     the original uploaded file, once
+ *
+ * Original files: an activity Strava has no original for (a manual entry, or
+ * one with no upload, both read from the stored metadata, or an export that
+ * answers 404) is marked `unavailable` with evidence and never exported
+ * again; it is backed up from metadata and streams and is never deleted. Any
+ * other export failure backs off exponentially (ORIGINAL_BACKOFF_*), with the
+ * next attempt time persisted, and all exports share an hourly cap.
  *
  * Incremental and idempotent: a normal backup fetches only parts not yet
  * stored; `fresh` re-fetches everything that can change (metadata, photos,
@@ -56,6 +74,35 @@ export interface BackupServiceOptions {
   log?: Logger;
   metrics?: Metrics;
   fetchPhoto?: FetchPhoto;
+  /** Cap on original-file web exports per rolling hour. */
+  exportsPerHour?: number;
+}
+
+/** First retry delay after a transient export failure; doubles per failure. */
+export const ORIGINAL_BACKOFF_BASE_MS = 15 * 60 * 1000;
+/** Longest delay between export retries. */
+export const ORIGINAL_BACKOFF_CAP_MS = 24 * 60 * 60 * 1000;
+export const DEFAULT_EXPORTS_PER_HOUR = 30;
+const HOUR_MS = 60 * 60 * 1000;
+
+/** Delay before the next export after `attempts` consecutive transient failures. */
+export function originalBackoffMs(attempts: number): number {
+  const exponent = Math.min(Math.max(attempts, 1) - 1, 20);
+  return Math.min(ORIGINAL_BACKOFF_BASE_MS * 2 ** exponent, ORIGINAL_BACKOFF_CAP_MS);
+}
+
+/**
+ * Why Strava can have no original for this activity, read from its API
+ * detail, or null when it may have one. Only an explicit `upload_id: null`
+ * counts: an absent key proves nothing.
+ */
+export function noOriginalReason(
+  detail: StravaDetailedActivity | null,
+): "manual" | "no_upload_id" | null {
+  if (detail === null) return null;
+  if (detail.manual === true) return "manual";
+  if ("upload_id" in detail && detail.upload_id === null) return "no_upload_id";
+  return null;
 }
 
 export interface BackupOptions {
@@ -68,8 +115,8 @@ export interface BackupOptions {
 export interface BackupOutcome {
   activityId: number;
   written: number;
-  /** The original file is stored (or Strava has none: see originalStatus). */
-  originalStatus: "pending" | "present" | "none";
+  /** The original file is stored, still to come, or Strava has none. */
+  originalStatus: OriginalStatus;
   webFormSaved: boolean;
   /** Every recorded file of the activity was read back and matched its checksum. */
   verified: boolean;
@@ -163,6 +210,9 @@ export class BackupService {
   readonly #log: Logger | undefined;
   readonly #metrics: Metrics | undefined;
   readonly #fetchPhoto: FetchPhoto;
+  readonly #exportsPerHour: number;
+  /** Start times of recent export attempts (rolling hour). */
+  #exports: number[] = [];
 
   constructor(options: BackupServiceOptions) {
     this.#db = options.db;
@@ -173,6 +223,7 @@ export class BackupService {
     this.#log = options.log;
     this.#metrics = options.metrics;
     this.#fetchPhoto = options.fetchPhoto ?? defaultFetchPhoto;
+    this.#exportsPerHour = options.exportsPerHour ?? DEFAULT_EXPORTS_PER_HOUR;
   }
 
   #has(activityId: number, kind: string): boolean {
@@ -333,8 +384,14 @@ export class BackupService {
     }
 
     let activity = requireActivity(this.#db, activityId);
-    if (activity.originalStatus === "pending" && this.#web.available()) {
-      note(await this.#backupOriginal(activityId, dir));
+    if (activity.originalStatus === "pending") {
+      detail ??= await this.latestJson<StravaDetailedActivity>(activityId, "metadata");
+      const reason = noOriginalReason(detail);
+      if (reason !== null) {
+        this.#markUnavailable(activityId, { reason });
+      } else if (this.#exportDue(activity.originalNextAttemptAt)) {
+        note(await this.#backupOriginal(activityId, dir, activity.originalAttempts));
+      }
     }
     if ((fresh || !activity.webFormSaved) && this.#web.available()) {
       note(await this.#backupWebForm(activityId, dir));
@@ -376,7 +433,28 @@ export class BackupService {
     }
   }
 
-  async #backupOriginal(activityId: number, dir: string): Promise<boolean> {
+  #markUnavailable(activityId: number, evidence: Record<string, unknown>): void {
+    setActivityFields(this.#db, activityId, {
+      original_status: "unavailable",
+      original_next_attempt_at: null,
+      original_evidence: JSON.stringify({ ...evidence, at: this.#now() }),
+    });
+    this.#metrics?.originalExports.inc({ result: "unavailable" });
+    this.#log?.info({ activityId, ...evidence }, "strava has no original file; never exported");
+  }
+
+  /** An export may run now: web up, backoff over, hourly cap not reached. */
+  #exportDue(nextAttemptAt: number | null): boolean {
+    const now = this.#now();
+    if (!this.#web.available() || (nextAttemptAt !== null && nextAttemptAt > now)) return false;
+    this.#exports = this.#exports.filter((at) => at > now - HOUR_MS);
+    if (this.#exports.length < this.#exportsPerHour) return true;
+    this.#metrics?.originalExports.inc({ result: "capped" });
+    return false;
+  }
+
+  async #backupOriginal(activityId: number, dir: string, attempts: number): Promise<boolean> {
+    this.#exports.push(this.#now());
     try {
       const file = await this.#web.run((session) => session.exportOriginal(activityId));
       const filename = safeFilename(file.filename);
@@ -386,14 +464,51 @@ export class BackupService {
         original_status: "present",
         original_path: relPath,
         original_format: dataTypeOf(filename),
+        original_attempts: 0,
+        original_next_attempt_at: null,
+        original_evidence: null,
       });
+      this.#metrics?.originalExports.inc({ result: "present" });
       return isNew;
     } catch (error) {
       if (error instanceof WebNotFoundError) {
-        setActivityFields(this.#db, activityId, { original_status: "none" });
+        this.#markUnavailable(activityId, { reason: "export_not_found" });
         return false;
       }
-      this.#log?.warn({ err: error, activityId }, "original export deferred");
+      // Session-wide trouble: the web gate pauses every web action and owns
+      // the retry, so this activity's backoff is left alone.
+      if (
+        error instanceof WebPausedError ||
+        error instanceof LoginRequiredError ||
+        error instanceof ChallengeError
+      ) {
+        this.#log?.warn({ err: error, activityId }, "original export deferred");
+        return false;
+      }
+      const failures = attempts + 1;
+      const nextAt = this.#now() + originalBackoffMs(failures);
+      const evidence = {
+        reason: "transient",
+        error: (error as Error).name,
+        ...(error instanceof WebNoFileError ? { response: error.response } : {}),
+        attempts: failures,
+        at: this.#now(),
+      };
+      setActivityFields(this.#db, activityId, {
+        original_attempts: failures,
+        original_next_attempt_at: nextAt,
+        original_evidence: JSON.stringify(evidence),
+      });
+      this.#metrics?.originalExports.inc({ result: "failed" });
+      this.#log?.warn(
+        {
+          err: error,
+          activityId,
+          attempts: failures,
+          nextAttemptAt: new Date(nextAt).toISOString(),
+        },
+        "original export failed; backing off",
+      );
       return false;
     }
   }

@@ -9,6 +9,7 @@ import {
   setActivityFields,
   writesFor,
 } from "../src/state/repo.ts";
+import { ORIGINAL_BACKOFF_BASE_MS } from "../src/service/backup.ts";
 import { LoginRequiredError } from "../src/web/errors.ts";
 import { addOuting, addWristPart } from "./fixtures/synthetic-outings.ts";
 import { createHarness, type Harness } from "./machine-harness.ts";
@@ -103,6 +104,8 @@ describe("detection and scoring", () => {
     expect(old.lastError).toBe("wait:original_pending");
     addWristPart(h.world, { seed: 502, from: 290, seconds: 600 });
     h.session.exportFails = false;
+    // The failed export backs off for 15 minutes before it is tried again.
+    h.clock.t += ORIGINAL_BACKOFF_BASE_MS;
     await h.poller.poll();
     const groups = listGroups(h.db);
     expect(requireGroup(h.db, old.id).status).toBe("superseded");
@@ -234,7 +237,20 @@ describe("deletion step edge cases", () => {
     h = await createHarness();
     const outing = addOuting(h.world);
     await h.poller.poll();
-    setActivityFields(h.db, outing.fitbit.id, { original_status: "none" });
+    setActivityFields(h.db, outing.fitbit.id, { original_status: "unavailable" });
+    h.settings.update({ switches: { delete: true } });
+    await h.machine.tick();
+    expect(listGroups(h.db)[0]).toMatchObject({
+      status: "parked",
+      parkedReason: "original_unavailable",
+    });
+  });
+
+  it("parks path B as original_missing when an original is no longer recorded", async () => {
+    h = await createHarness();
+    const outing = addOuting(h.world);
+    await h.poller.poll();
+    setActivityFields(h.db, outing.fitbit.id, { original_status: "pending" });
     h.settings.update({ switches: { delete: true } });
     await h.machine.tick();
     expect(listGroups(h.db)[0]).toMatchObject({
@@ -252,7 +268,7 @@ describe("deletion step edge cases", () => {
     // The original record is lost during the fresh pre-delete backup.
     h.world.onRequest = (method, path) => {
       if (path === `/api/v3/activities/${outing.fitbit.id}` && h.world.uploads.size > 0) {
-        setActivityFields(h.db, outing.fitbit.id, { original_status: "none" });
+        setActivityFields(h.db, outing.fitbit.id, { original_status: "unavailable" });
       }
     };
     await h.machine.tick();

@@ -11,6 +11,7 @@ import {
   DeletionNotConfirmedError,
   DeletionUnauthorizedError,
   LoginRequiredError,
+  WebNoFileError,
   WebNotFoundError,
   WebNotReadyError,
   WebTimeoutError,
@@ -189,7 +190,17 @@ describe("export", () => {
   it("refuses an HTML answer and reports a missing activity", async () => {
     const session = open();
     fake.mode = "export_html";
-    await expect(session.exportOriginal(RUN_ID)).rejects.toBeInstanceOf(WebUnexpectedResponseError);
+    const error = await session.exportOriginal(RUN_ID).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WebUnexpectedResponseError);
+    expect(error).toBeInstanceOf(WebNoFileError);
+    expect((error as WebNoFileError).response).toMatchObject({
+      status: 200,
+      finalPath: `/activities/${RUN_ID}/export_original`,
+      redirected: false,
+    });
+    expect((error as WebNoFileError).response.contentType).toMatch(/^text\/html/);
+    expect((error as WebNoFileError).response.size).toBeGreaterThan(0);
+    expect((error as Error).message).toMatch(/did not return a file \(200 text\/html/);
     fake.mode = "normal";
     await expect(session.exportOriginal(1234)).rejects.toBeInstanceOf(WebNotFoundError);
   });
