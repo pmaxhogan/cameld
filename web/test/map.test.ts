@@ -5,6 +5,9 @@ const handlers = new Map<string, () => void>();
 const addSource = vi.fn();
 const addLayer = vi.fn();
 const fitBounds = vi.fn();
+const layers = new Set<string>();
+const getLayer = vi.fn((id: string) => (layers.has(id) ? { id } : undefined));
+const setLayoutProperty = vi.fn();
 
 vi.mock("maplibre-gl", () => ({
   Map: class {
@@ -17,10 +20,12 @@ vi.mock("maplibre-gl", () => ({
     addSource = addSource;
     addLayer = addLayer;
     fitBounds = fitBounds;
+    getLayer = getLayer;
+    setLayoutProperty = setLayoutProperty;
   },
 }));
 
-const { BLANK_STYLE, boundsOf, createTrackMap, lineFeature, styleFor } =
+const { BLANK_STYLE, applyHidden, boundsOf, createTrackMap, lineFeature, styleFor } =
   await import("../src/map.ts");
 
 const line = (coordinates: [number, number][]) => ({ label: "x", coordinates, points: 0 });
@@ -77,6 +82,27 @@ describe("map helpers", () => {
       ],
       { padding: 24, animate: false },
     );
+  });
+
+  it("hides the chosen lines once drawn and skips layers not drawn yet", () => {
+    setLayoutProperty.mockClear();
+    const lines = [
+      { id: "app", line: line([[0.5, 0.5]]), color: "#00f", dashed: false },
+      { id: "merged", line: line([[0.6, 0.6]]), color: "#0f0", dashed: true },
+    ];
+    createTrackMap(document.createElement("div"), null, lines, () => ["merged"]);
+    layers.add("app");
+    layers.add("merged");
+    handlers.get("load")!();
+    expect(setLayoutProperty.mock.calls).toEqual([
+      ["app", "visibility", "visible"],
+      ["merged", "visibility", "none"],
+    ]);
+    setLayoutProperty.mockClear();
+    layers.delete("merged");
+    applyHidden({ getLayer, setLayoutProperty } as never, lines, ["app"]);
+    expect(setLayoutProperty.mock.calls).toEqual([["app", "visibility", "none"]]);
+    layers.clear();
   });
 
   it("skips fitting when there is nothing to show", () => {

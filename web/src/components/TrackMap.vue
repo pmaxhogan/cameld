@@ -1,20 +1,36 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from "vue";
-import { createTrackMap, type MapLine } from "../map.ts";
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { applyHidden, createTrackMap, type MapLine } from "../map.ts";
 
-const props = defineProps<{ lines: MapLine[]; styleUrl: string | null; testid: string }>();
+const props = withDefaults(
+  defineProps<{
+    lines: MapLine[];
+    styleUrl: string | null;
+    testid: string;
+    /** Ids of lines to hide (the comparison's toggles). */
+    hidden?: string[];
+  }>(),
+  { hidden: () => [] },
+);
 
 const el = ref<HTMLElement | null>(null);
 let map: ReturnType<typeof createTrackMap> | null = null;
 
 onMounted(() => {
   try {
-    map = createTrackMap(el.value as HTMLElement, props.styleUrl, props.lines);
+    map = createTrackMap(el.value as HTMLElement, props.styleUrl, props.lines, () => props.hidden);
   } catch (error) {
     // No WebGL (headless, old browser): the container stays as an empty panel.
     console.warn("map unavailable", error);
   }
 });
+
+watch(
+  () => props.hidden,
+  (hidden) => {
+    if (map !== null) applyHidden(map, props.lines, hidden);
+  },
+);
 
 onBeforeUnmount(() => {
   map?.remove();

@@ -79,11 +79,31 @@ export function drawLines(map: MapLibreMap, lines: readonly MapLine[]): void {
   if (bounds !== null) map.fitBounds(bounds, { padding: 24, animate: false });
 }
 
-/** Builds a map in `container` and draws `lines` once the style has loaded. */
+/**
+ * Shows or hides each drawn line layer. Layers only exist once the style has
+ * loaded, so ids without a layer yet are skipped (the load handler applies
+ * the current choice when it draws).
+ */
+export function applyHidden(
+  map: Pick<MapLibreMap, "getLayer" | "setLayoutProperty">,
+  lines: readonly MapLine[],
+  hidden: readonly string[],
+): void {
+  for (const entry of lines) {
+    if (map.getLayer(entry.id) === undefined) continue;
+    map.setLayoutProperty(entry.id, "visibility", hidden.includes(entry.id) ? "none" : "visible");
+  }
+}
+
+/**
+ * Builds a map in `container` and draws `lines` once the style has loaded,
+ * hiding the ids `hidden()` returns at that moment.
+ */
 export function createTrackMap(
   container: HTMLElement,
   styleUrl: string | null,
   lines: readonly MapLine[],
+  hidden: () => readonly string[] = () => [],
 ): MapLibreMap {
   const map = new MapLibreMap({
     container,
@@ -92,6 +112,9 @@ export function createTrackMap(
     zoom: 1,
     attributionControl: false,
   });
-  map.on("load", () => drawLines(map, lines));
+  map.on("load", () => {
+    drawLines(map, lines);
+    applyHidden(map, lines, hidden());
+  });
   return map;
 }

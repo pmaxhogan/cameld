@@ -7,10 +7,15 @@ import Tag from "primevue/tag";
 import { computed, onMounted, ref, watch } from "vue";
 import { apiGet, errorText } from "../api.ts";
 import { fmtTime, severityOf } from "../format.ts";
+import { parkLabel, statusLabel } from "../labels.ts";
 import { groupHref } from "../router.ts";
 import GroupDetailView from "./GroupDetailView.vue";
 
-const props = defineProps<{ counts: Record<string, number>; groupId: string | null }>();
+const props = defineProps<{
+  counts: Record<string, number>;
+  groupId: string | null;
+  styleUrl: string | null;
+}>();
 
 const filter = ref("");
 const groups = ref<GroupSummary[] | null>(null);
@@ -40,7 +45,7 @@ onMounted(load);
   <section>
     <template v-if="groupId">
       <a href="#/history" data-testid="history-back">Back to history</a>
-      <GroupDetailView :key="groupId" :group-id="groupId" />
+      <GroupDetailView :key="groupId" :group-id="groupId" :style-url="styleUrl" />
     </template>
     <template v-else>
       <h2>History</h2>
@@ -48,38 +53,52 @@ onMounted(load);
         Status
         <select v-model="filter" class="p-inputtext" data-testid="history-filter">
           <option value="">all</option>
-          <option v-for="s in statuses" :key="s" :value="s">{{ s }} ({{ counts[s] }})</option>
+          <option v-for="s in statuses" :key="s" :value="s">
+            {{ statusLabel(s) }} ({{ counts[s] }})
+          </option>
         </select>
       </label>
       <Message v-if="error" severity="error" data-testid="history-error">{{ error }}</Message>
-      <DataTable :value="groups ?? []" data-key="id" size="small" data-testid="history-table">
-        <template #empty><span data-testid="history-empty">No groups.</span></template>
-        <Column header="Start">
-          <template #body="{ data }">
-            <a :href="groupHref(data.id)" data-testid="history-row">{{ fmtTime(data.startMs) }}</a>
-          </template>
-        </Column>
-        <Column header="Status">
-          <template #body="{ data }">
-            <Tag :value="data.status" :severity="severityOf(data.status)" />
-          </template>
-        </Column>
-        <Column field="name" header="Name" />
-        <Column field="sportType" header="Sport" />
-        <Column header="Members">
-          <template #body="{ data }">
-            {{ data.appIds.length }} app, {{ data.fitbitIds.length }} fitbit
-          </template>
-        </Column>
-        <Column header="Updated">
-          <template #body="{ data }">{{ fmtTime(data.updatedAt) }}</template>
-        </Column>
-      </DataTable>
+      <div class="table-scroll">
+        <DataTable :value="groups ?? []" data-key="id" size="small" data-testid="history-table">
+          <template #empty><span data-testid="history-empty">No groups.</span></template>
+          <Column header="Start">
+            <template #body="{ data }">
+              <a :href="groupHref(data.id)" data-testid="history-row">{{
+                fmtTime(data.startMs)
+              }}</a>
+            </template>
+          </Column>
+          <Column header="Status">
+            <template #body="{ data }">
+              <Tag
+                :value="statusLabel(data.status)"
+                :severity="severityOf(data.status)"
+                :title="data.parkedReason === null ? data.status : parkLabel(data.parkedReason)"
+              />
+            </template>
+          </Column>
+          <Column field="name" header="Name" />
+          <Column field="sportType" header="Sport" />
+          <Column header="Members">
+            <template #body="{ data }">
+              {{ data.appIds.length }} phone, {{ data.fitbitIds.length }} wrist
+            </template>
+          </Column>
+          <Column header="Updated">
+            <template #body="{ data }">{{ fmtTime(data.updatedAt) }}</template>
+          </Column>
+        </DataTable>
+      </div>
     </template>
   </section>
 </template>
 
 <style scoped>
+.table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
 .filter {
   display: inline-flex;
   gap: 0.5rem;

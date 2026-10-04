@@ -36,7 +36,7 @@ watch(
     :closable="false"
     :close-on-escape="false"
     :header="title"
-    :style="{ width: '34rem' }"
+    :style="{ width: '34rem', maxWidth: '95vw' }"
     :pt="{ root: { 'data-testid': 'delete-confirm-dialog' } }"
   >
     <Message severity="warn" :closable="false">

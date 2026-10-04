@@ -86,6 +86,23 @@ describe("App", () => {
     await go("#/browser");
     expect(byTestId("browser-frame")).not.toBeNull();
     expect(byTestId("nav-browser")?.classList.contains("active")).toBe(true);
+    await go("#/no-such-page");
+    expect(byTestId("not-found-path")?.textContent).toBe("#/no-such-page");
+    expect(byTestId("review-empty")).toBeNull();
+    const links = [...byTestId("not-found")!.querySelectorAll("a")].map((a) =>
+      a.getAttribute("href"),
+    );
+    expect(links).toContain("#/review");
+    expect(links).toContain("#/history");
+  });
+
+  it("shows a git sha version shortened in the footer, not the header", async () => {
+    await mountApp({ body: apiStatus({ version: "abcdef0123456789abcdef0123456789abcdef01" }) });
+    const version = byTestId("version")!;
+    expect(version.textContent).toBe("vabcdef0");
+    expect(version.closest("footer")).not.toBeNull();
+    expect(version.getAttribute("title")).toContain("abcdef0123456789");
+    expect(document.querySelector("header")?.textContent).not.toContain("abcdef0");
   });
 
   it("shows a loading state and a status error", async () => {

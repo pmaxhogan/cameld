@@ -16,6 +16,10 @@ export interface FieldDef {
   scale: number;
   /** Round the server value to a whole number. */
   integer: boolean;
+  /** One line under the input explaining what the number does. */
+  help: string;
+  /** The value is a 0..1 fraction: show it as a percentage next to the input. */
+  fraction?: boolean;
 }
 
 export const FIELDS: readonly FieldDef[] = [
@@ -26,6 +30,7 @@ export const FIELDS: readonly FieldDef[] = [
     path: ["timing", "gracePeriodMs"],
     scale: HOUR_MS,
     integer: true,
+    help: "How long the originals stay hidden after a verified merge before they may be deleted.",
   },
   {
     id: "partnerWait",
@@ -34,14 +39,17 @@ export const FIELDS: readonly FieldDef[] = [
     path: ["timing", "partnerWaitMs"],
     scale: HOUR_MS,
     integer: true,
+    help: "How long to wait for the second recording before treating an activity as single.",
   },
   {
     id: "autoOverlap",
-    label: "Minimum overlap for an automatic match (0 to 1)",
+    label: "Minimum overlap for an automatic match (fraction)",
     testid: "setting-auto-overlap",
     path: ["match", "autoMinOverlap"],
     scale: 1,
     integer: false,
+    help: "Share of the shorter recording's time both must cover. 0.8 = 80%.",
+    fraction: true,
   },
   {
     id: "maxStartDelta",
@@ -50,6 +58,7 @@ export const FIELDS: readonly FieldDef[] = [
     path: ["match", "maxStartDeltaSeconds"],
     scale: 1,
     integer: true,
+    help: "Recordings that start further apart than this are never paired.",
   },
   {
     id: "gpsAuto",
@@ -58,6 +67,7 @@ export const FIELDS: readonly FieldDef[] = [
     path: ["match", "gpsAutoMaxMedianMeters"],
     scale: 1,
     integer: false,
+    help: "At or below this median distance between the tracks, the pair merges automatically.",
   },
   {
     id: "gpsReview",
@@ -66,6 +76,7 @@ export const FIELDS: readonly FieldDef[] = [
     path: ["match", "gpsReviewMaxMedianMeters"],
     scale: 1,
     integer: false,
+    help: "Between the automatic limit and this, the pair goes to the review queue. Above it: no match.",
   },
   {
     id: "maxAutoOffset",
@@ -74,14 +85,17 @@ export const FIELDS: readonly FieldDef[] = [
     path: ["match", "alignment", "maxAutoOffsetSeconds"],
     scale: 1,
     integer: true,
+    help: "A larger measured clock offset sends the pair to review instead of being applied.",
   },
   {
     id: "uploadTolerance",
-    label: "Post-upload check tolerance (0 to 1)",
+    label: "Post-upload check tolerance (fraction, 0.05 = 5%)",
     testid: "setting-upload-tolerance",
     path: ["postUpload", "tolerance"],
     scale: 1,
     integer: false,
+    help: "How far the uploaded activity's point count, distance and elapsed time may differ from the merged file (Strava resamples). A fraction: 0.05 = 5%.",
+    fraction: true,
   },
 ];
 
@@ -92,6 +106,8 @@ export interface SwitchDef {
   path: readonly string[];
   /** Turning it on deletes originals: needs the typed confirmation. */
   dangerous: boolean;
+  /** What the switch does and what it depends on. "{maxPairs}" is filled in. */
+  help: string;
 }
 
 export const SWITCHES: readonly SwitchDef[] = [
@@ -101,6 +117,7 @@ export const SWITCHES: readonly SwitchDef[] = [
     testid: "switch-hide",
     path: ["switches", "hide"],
     dangerous: false,
+    help: 'Applies only after a merged upload has passed the post-upload check: both originals are then set to "Only me" for the grace period. Off: they stay visible until deleted.',
   },
   {
     id: "upload",
@@ -108,6 +125,7 @@ export const SWITCHES: readonly SwitchDef[] = [
     testid: "switch-upload",
     path: ["switches", "upload"],
     dangerous: false,
+    help: "Off: groups stop before the merged upload and nothing is written to Strava. Hiding and deleting only ever follow a verified upload.",
   },
   {
     id: "delete",
@@ -115,6 +133,7 @@ export const SWITCHES: readonly SwitchDef[] = [
     testid: "switch-delete",
     path: ["switches", "delete"],
     dangerous: true,
+    help: "Deletes both originals once the grace period is over. Also needed for Path B: Strava rejects a merged upload as a duplicate while the originals exist, so those pairs stay parked until deletion is on.",
   },
   {
     id: "trial",
@@ -122,8 +141,16 @@ export const SWITCHES: readonly SwitchDef[] = [
     testid: "switch-trial",
     path: ["trial", "enabled"],
     dangerous: true,
+    help: "Allows deletion (including Path B) for at most {maxPairs} pairs while the delete switch stays off, to prove the whole path once. Later pairs park as usual.",
   },
 ];
+
+/** "0.05" as "5%" for fraction fields; "" when the value is not a number. */
+export function percentHint(value: number | string | undefined): string {
+  const n = typeof value === "number" ? value : Number.NaN;
+  if (!Number.isFinite(n)) return "";
+  return `= ${String(Number((n * 100).toFixed(2)))}%`;
+}
 
 export type Values = Record<string, number | string>;
 export type Toggles = Record<string, boolean>;

@@ -42,12 +42,21 @@ async function mountBackfill(
 describe("BackfillView", () => {
   it("shows budget, login health, progress and the dry-run report", async () => {
     await mountBackfill();
-    expect(byTestId("rate-budget")?.textContent).toContain("50 / 200");
+    const strava = byTestId("rate-budget")!.textContent;
+    expect(strava).toContain("Strava app usage (all consumers)");
+    expect(strava).toContain("50 / 200");
+    expect(strava).toContain("25 / 100");
+    const cameld = byTestId("cameld-budget")!.textContent;
+    expect(cameld).toContain("cameld budget");
+    expect(byTestId("cameld-budget-fifteen")?.textContent).toContain("6 / 40, 34 left");
+    expect(byTestId("cameld-budget-daily")?.textContent).toContain("34 / 500, 466 left");
+    expect(byTestId("reads-today")?.textContent).toContain("34 of 500 (cameld daily cap)");
+    expect(byTestId("budget-left")?.textContent).toContain("34 reads now");
+    expect(byTestId("budget-left")?.textContent).toContain("cameld 15-minute cap");
     expect(byTestId("login-health")?.textContent).toContain("healthy");
     expect(byTestId("login-health")?.querySelector("a")?.getAttribute("href")).toBe("#/browser");
     const progress = byTestId("backfill-progress")!.textContent;
     expect(progress).toContain("12");
-    expect(progress).toContain("34");
     expect(byTestId("backfill-last-batch")).toBeNull();
     expect(byTestId("backfill-message")).toBeNull();
     const table = byTestId("dry-run-table")!.textContent;
@@ -66,6 +75,7 @@ describe("BackfillView", () => {
       lastBatch: {
         mode: "dry_run",
         stopped: "budget",
+        budgetLimit: "daily",
         activities: 5,
         groups: 2,
         error: "boom",
@@ -79,10 +89,24 @@ describe("BackfillView", () => {
     expect(byTestId("rate-budget")?.textContent).toContain("No Strava data yet");
     expect(byTestId("login-health")?.textContent).toContain("login expired");
     expect(byTestId("backfill-progress")?.textContent).toContain("yes (paused)");
-    expect(byTestId("backfill-last-batch")?.textContent).toContain("error: boom");
-    expect(byTestId("dry-run-empty")).not.toBeNull();
+    expect(byTestId("backfill-last-batch")?.textContent).toContain(
+      "stopped: budget (cameld daily cap), error: boom",
+    );
+    const empty = byTestId("dry-run-empty")!.textContent;
+    expect(empty).toContain("only while the backfill runs in dry_run mode");
+    expect(empty).toContain("The current mode is off");
     expect(byTestId("backfill-pause")?.textContent).toContain("Resume");
     expect((byTestId("backfill-start") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("explains an empty report in dry_run mode without the mode hint", async () => {
+    const info = backfillInfo({ mode: "dry_run" });
+    await mountBackfill(apiStatus({ backfill: info }), {
+      "GET /api/backfill/report": { body: { ...REPORT, groups: [] } },
+    });
+    const empty = byTestId("dry-run-empty")!.textContent;
+    expect(empty).toContain("dry_run");
+    expect(empty).not.toContain("The current mode is");
   });
 
   it("shows a last batch without an error and load failures", async () => {
@@ -92,6 +116,7 @@ describe("BackfillView", () => {
           lastBatch: {
             mode: "live",
             stopped: "done",
+            budgetLimit: null,
             activities: 1,
             groups: 0,
             error: null,
@@ -115,7 +140,12 @@ describe("BackfillView", () => {
       "PATCH /api/backfill": (init) => ({
         body: backfillInfo({
           ...JSON.parse(String(init?.body)),
-          budget: { dailyReads: 300, fifteenMinuteReads: 20, remaining: 1 },
+          budget: {
+            ...backfillInfo().budget,
+            dailyReads: 300,
+            fifteenMinuteReads: 20,
+            remaining: 1,
+          },
         }),
       }),
     });
@@ -211,6 +241,14 @@ describe("BackfillView", () => {
     await flushPromises();
     click("backfill-reset");
     await flushPromises();
+    const confirm = byTestId("backfill-reset-confirm") as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    setValue("backfill-reset-input", "res");
+    await flushPromises();
+    expect(confirm.disabled).toBe(true);
+    setValue("backfill-reset-input", "reset");
+    await flushPromises();
+    expect(confirm.disabled).toBe(false);
     click("backfill-reset-confirm");
     await flushPromises();
     const actions = calls
