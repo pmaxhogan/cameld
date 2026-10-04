@@ -31,7 +31,7 @@ describe("deletion guards", () => {
     await h.poller.poll();
     expect(listGroups(h.db)[0]).toMatchObject({
       status: "parked",
-      parkedReason: "original_missing",
+      parkedReason: "original_unavailable",
     });
     expect(h.world.uploads.size).toBe(0);
     expect(h.session.deleted).toEqual([]);

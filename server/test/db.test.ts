@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -31,6 +31,7 @@ describe("migrate", () => {
       "0002_strava_tokens.sql",
       "0003_merge_state.sql",
       "0004_ui.sql",
+      "0005_original_retries.sql",
     ]);
     expect(migrate(db, MIGRATIONS_DIR)).toEqual([]);
     db.prepare("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)").run(
@@ -46,7 +47,47 @@ describe("migrate", () => {
   it("creates the database file and parent directories on disk", () => {
     const path = join(tempDir(), "nested", "state", "cameld.db");
     const db = openDatabase(path);
-    expect(migrate(db, MIGRATIONS_DIR)).toHaveLength(4);
+    expect(migrate(db, MIGRATIONS_DIR)).toHaveLength(5);
+    db.close();
+  });
+
+  it("renames the old 'none' original status to 'unavailable' and adds retry columns", () => {
+    const shipped = (name: string): string => readFileSync(join(MIGRATIONS_DIR, name), "utf8");
+    const first = [
+      "0001_settings.sql",
+      "0002_strava_tokens.sql",
+      "0003_merge_state.sql",
+      "0004_ui.sql",
+    ];
+    const dir = migrationsDir(Object.fromEntries(first.map((name) => [name, shipped(name)])));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const insert = db.prepare(
+      `INSERT INTO activities (id, start_ms, end_ms, source, first_seen_at, original_status)
+       VALUES (?, 0, 1, 'other', 0, ?)`,
+    );
+    insert.run(1, "none");
+    insert.run(2, "present");
+    insert.run(3, "pending");
+    writeFileSync(join(dir, "0005_original_retries.sql"), shipped("0005_original_retries.sql"));
+    expect(migrate(db, dir)).toEqual(["0005_original_retries.sql"]);
+    expect(
+      db
+        .prepare(
+          "SELECT id, original_status, original_attempts, original_next_attempt_at FROM activities ORDER BY id",
+        )
+        .all()
+        .map((row) => ({ ...row })),
+    ).toEqual([
+      {
+        id: 1,
+        original_status: "unavailable",
+        original_attempts: 0,
+        original_next_attempt_at: null,
+      },
+      { id: 2, original_status: "present", original_attempts: 0, original_next_attempt_at: null },
+      { id: 3, original_status: "pending", original_attempts: 0, original_next_attempt_at: null },
+    ]);
     db.close();
   });
 

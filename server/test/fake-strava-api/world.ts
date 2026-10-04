@@ -49,6 +49,8 @@ export interface WorldActivity {
   kudos: { firstname: string; lastname: string }[];
   comments: { id: number; text: string }[];
   original: { filename: string; bytes: Buffer } | null;
+  /** A manual entry: Strava reports `manual: true` and `upload_id: null`. */
+  manual: boolean;
   samples: ActivitySample[];
   exists: boolean;
 }
@@ -145,6 +147,7 @@ export class FakeWorld {
       kudos: [],
       comments: [],
       original: null,
+      manual: false,
       exists: true,
       ...activity,
       samples,

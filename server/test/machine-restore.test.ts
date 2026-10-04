@@ -96,7 +96,9 @@ describe("manual restore of a merge", () => {
     h.clock.t += 25 * HOUR;
     await h.machine.tick();
     const group = listGroups(h.db)[0]!;
-    h.db.prepare("UPDATE activities SET original_status = 'none' WHERE id = ?").run(outing.app.id);
+    h.db
+      .prepare("UPDATE activities SET original_status = 'unavailable' WHERE id = ?")
+      .run(outing.app.id);
     const result = await h.machine.restoreGroup(group.id, "synthetic owner reason");
     const refused = result.restored.find((r) => r.id === outing.app.id);
     expect(refused).toEqual({

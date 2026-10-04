@@ -209,6 +209,7 @@ describe("read routes", () => {
       stravaConfigured: true,
       polling: true,
       counts: { review: 1, done: 1 },
+      originals: { present: expect.any(Number), unavailable: 0, backingOff: 0 },
       trial: { enabled: false, maxPairs: 3, used: 0 },
       push: { configured: true, publicKey: "BSynthetic", subscriptions: 0 },
       map: { styleUrl: null },

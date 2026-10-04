@@ -692,7 +692,7 @@ export class MergeMachine {
           failures: outcome.failures,
         });
       }
-      if (outcome.originalStatus === "none") throw new Park("original_missing", null);
+      if (outcome.originalStatus === "unavailable") throw new Park("original_unavailable", null);
       if (outcome.originalStatus === "pending") throw new Wait("original_pending");
       outcomes.push({ id, verifiedAt: outcome.verifiedAt, written: outcome.written });
     }
@@ -843,9 +843,9 @@ export class MergeMachine {
   async #stepPathB(group: GroupRow): Promise<Step> {
     if (this.#permit(group) === null) throw new Park("deletion_switch_off", "b_rejected");
     for (const id of this.#members(group)) {
-      if (requireActivity(this.#db, id).originalStatus !== "present") {
-        throw new Park("original_missing", null);
-      }
+      const status = requireActivity(this.#db, id).originalStatus;
+      if (status === "unavailable") throw new Park("original_unavailable", null);
+      if (status !== "present") throw new Park("original_missing", null);
     }
     return {
       to: "b_delete_fitbit",

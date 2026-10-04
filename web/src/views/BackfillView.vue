@@ -196,6 +196,26 @@ onMounted(async () => {
         </dl>
       </div>
 
+      <div class="card" data-testid="originals">
+        <h3>Original files</h3>
+        <dl>
+          <dt>Backed up</dt>
+          <dd data-testid="originals-present">{{ props.status.originals.present }}</dd>
+          <dt>Still to export</dt>
+          <dd data-testid="originals-pending">
+            {{ props.status.originals.pending }}
+            <template v-if="props.status.originals.backingOff > 0">
+              ({{ props.status.originals.backingOff }} waiting to retry after a failed export)
+            </template>
+          </dd>
+        </dl>
+        <p v-if="props.status.originals.unavailable > 0" data-testid="originals-unavailable">
+          {{ props.status.originals.unavailable }}
+          {{ props.status.originals.unavailable === 1 ? "activity has" : "activities have" }}
+          no original file; they will be backed up from streams and never deleted.
+        </p>
+      </div>
+
       <div class="card" data-testid="login-health">
         <h3>Strava web login</h3>
         <Tag

@@ -71,6 +71,7 @@ describe("Metrics", () => {
       rateUsage: () => usage,
       backupTotals: () => ({ bytes: 1234, files: 5 }),
       backfill: () => ({ activities: 9, cursorMs: 2_000_000, done: false, readsToday: 33 }),
+      originals: () => ({ present: 120, pending: 2, unavailable: 5, backingOff: 1 }),
       ...over,
     };
   }
@@ -96,6 +97,10 @@ describe("Metrics", () => {
       "cameld_backfill_cursor_timestamp_seconds 2000",
       "cameld_backfill_done 0",
       "cameld_backfill_reads_today 33",
+      'cameld_original_files{status="present"} 120',
+      'cameld_original_files{status="pending"} 2',
+      'cameld_original_files{status="unavailable"} 5',
+      'cameld_original_files{status="backing_off"} 1',
       "cameld_process_cpu_user_seconds_total",
     ]) {
       expect(text).toContain(line);

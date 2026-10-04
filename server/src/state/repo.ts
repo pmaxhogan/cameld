@@ -10,7 +10,8 @@ import type { StravaSummaryActivity } from "../strava/types.ts";
 /** external_id prefix of every merged file cameld uploads. */
 export const MERGE_EXTERNAL_ID_PREFIX = "cameld-merge-";
 
-export type OriginalStatus = "pending" | "present" | "none";
+/** pending: not stored yet; present: stored; unavailable: Strava has none (terminal). */
+export type OriginalStatus = "pending" | "present" | "unavailable";
 
 export interface ActivityRow {
   id: number;
@@ -27,6 +28,12 @@ export interface ActivityRow {
   originalStatus: OriginalStatus;
   originalPath: string | null;
   originalFormat: string | null;
+  /** Transient export failures since the last success. */
+  originalAttempts: number;
+  /** Epoch ms before which no export is attempted (backoff), or null. */
+  originalNextAttemptAt: number | null;
+  /** JSON evidence: why the original is unavailable, or the last failure. */
+  originalEvidence: string | null;
   webFormSaved: boolean;
   singleAt: number | null;
   goneAt: number | null;
@@ -52,6 +59,9 @@ function toActivity(row: Row): ActivityRow {
     originalStatus: row.original_status as OriginalStatus,
     originalPath: row.original_path as string | null,
     originalFormat: row.original_format as string | null,
+    originalAttempts: row.original_attempts as number,
+    originalNextAttemptAt: row.original_next_attempt_at as number | null,
+    originalEvidence: row.original_evidence as string | null,
     webFormSaved: row.web_form_saved === 1,
     singleAt: row.single_at as number | null,
     goneAt: row.gone_at as number | null,
@@ -402,6 +412,30 @@ export function trialPairsUsed(db: DatabaseSync): number {
   return (
     db.prepare("SELECT count(*) AS n FROM merge_groups WHERE trial = 1").get() as { n: number }
   ).n;
+}
+
+export interface OriginalCounts {
+  present: number;
+  pending: number;
+  /** Strava has no original (manual entries): backed up from streams, never deleted. */
+  unavailable: number;
+  /** Pending activities waiting out an export backoff. */
+  backingOff: number;
+}
+
+/** Original-file status of every live, non-merge activity. */
+export function originalCounts(db: DatabaseSync, now: number): OriginalCounts {
+  const row = db
+    .prepare(
+      `SELECT
+         coalesce(sum(original_status = 'present'), 0) AS present,
+         coalesce(sum(original_status = 'pending'), 0) AS pending,
+         coalesce(sum(original_status = 'unavailable'), 0) AS unavailable,
+         coalesce(sum(original_status = 'pending' AND original_next_attempt_at > ?), 0) AS backingOff
+       FROM activities WHERE gone_at IS NULL AND is_merge_output = 0`,
+    )
+    .get(now) as unknown as OriginalCounts;
+  return { ...row };
 }
 
 export function parkedByReason(db: DatabaseSync): Record<string, number> {

@@ -13,6 +13,8 @@ export const PARK_REASONS: Record<string, string> = {
   deletion_switch_off: "Parked: deletion is off, so both originals were left in place on Strava",
   original_missing:
     "Parked: an original uploaded file is not in the backup, so nothing can be deleted",
+  original_unavailable:
+    "Parked: Strava has no original file for a member (a manual entry), so it is backed up from streams and never deleted",
 };
 
 /** What each event in a group's timeline means. */

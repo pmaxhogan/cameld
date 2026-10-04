@@ -11,6 +11,7 @@ import {
   ChallengeError,
   DeletionNotConfirmedError,
   LoginRequiredError,
+  WebNoFileError,
   WebNotReadyError,
   WebSessionError,
   WebTimeoutError,
@@ -185,6 +186,7 @@ function timeoutAfter(ms: number, error: () => Error): { promise: Promise<never>
 interface Fetched {
   status: number;
   url: string;
+  redirected: boolean;
   headers: Record<string, string>;
   bytes: Buffer;
 }
@@ -356,8 +358,15 @@ export class WebSession implements StravaWebSession {
       await this.#navigate(page, this.#landingPath);
       const response = await this.#fetch(page, "GET", path, { kind: "none" });
       const contentType = response.headers["content-type"] ?? "application/octet-stream";
-      if (contentType.startsWith("text/html") || response.bytes.length === 0)
-        throw new WebUnexpectedResponseError(`${path} did not return a file`);
+      if (contentType.startsWith("text/html") || response.bytes.length === 0) {
+        throw new WebNoFileError(path, {
+          status: response.status,
+          contentType: response.headers["content-type"] ?? "",
+          finalPath: new URL(response.url).pathname,
+          redirected: response.redirected,
+          size: response.bytes.length,
+        });
+      }
       const filename =
         parseContentDisposition(response.headers["content-disposition"]) ??
         `${activityId}.${extension}`;
@@ -716,7 +725,13 @@ export class WebSession implements StravaWebSession {
       { path, allowNotFound },
     );
     if (error !== null) throw error;
-    return { status: response.status, url: response.url, headers: response.headers, bytes };
+    return {
+      status: response.status,
+      url: response.url,
+      redirected: response.redirected,
+      headers: response.headers,
+      bytes,
+    };
   }
 }
 
