@@ -74,6 +74,9 @@ export interface BackfillProgressInfo {
   readsToday: number;
 }
 
+/** One of cameld's own backfill read caps (not Strava's app-wide limits). */
+export type BudgetWindow = "daily" | "fifteen_minute";
+
 export interface BackfillInfo {
   mode: BackfillMode;
   paused: boolean;
@@ -81,13 +84,34 @@ export interface BackfillInfo {
   /** False when Strava is not configured: start is unavailable. */
   available: boolean;
   progress: BackfillProgressInfo;
-  budget: { dailyReads: number; fifteenMinuteReads: number; remaining: number };
+  /**
+   * cameld's own read budget for the backfill (settings.backfill caps), as
+   * opposed to `ApiStatus.rate`, which is Strava's app-wide usage across every
+   * consumer of the shared Strava app.
+   */
+  budget: {
+    /** Cap per UTC day. */
+    dailyReads: number;
+    /** Cap per 15-minute window. */
+    fifteenMinuteReads: number;
+    /** Reads spent today (the same count as progress.readsToday). */
+    dailyUsed: number;
+    /** Reads spent in the current 15-minute window. */
+    fifteenMinuteUsed: number;
+    /** Reads allowed right now: the smaller of the two windows' headroom. */
+    remaining: number;
+    /** The window that sets `remaining` (the one with less headroom). */
+    limitedBy: BudgetWindow;
+  };
   lastBatch: BackfillBatchInfo | null;
 }
 
 export interface BackfillBatchInfo {
   mode: BackfillMode;
+  /** off, paused, budget, rate_limited, done, error or running. */
   stopped: string;
+  /** With stopped "budget": which of cameld's caps ran out. */
+  budgetLimit: BudgetWindow | null;
   activities: number;
   groups: number;
   error: string | null;
@@ -148,6 +172,8 @@ export interface WriteInfo {
   id: number;
   kind: string;
   targetId: number | null;
+  /** The upload's external_id (uploads have no target activity yet). */
+  externalId: string | null;
   status: string;
   result: unknown;
   createdAt: number;
@@ -176,6 +202,8 @@ export interface GroupDetail {
   writes: WriteInfo[];
   /** Whether the restore action is allowed for this group's status. */
   restorable: boolean;
+  /** True once the merged FIT is built and stored in the backup (tracks can be compared). */
+  mergeBuilt: boolean;
 }
 
 /** [lng, lat] pairs, as MapLibre wants them. */

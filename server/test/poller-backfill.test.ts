@@ -149,6 +149,7 @@ describe("Backfill", () => {
     h.clock.t += 10 * DAY;
     const first = await h.backfill.runBatch();
     expect(first.stopped).toBe("budget");
+    expect(first.budgetLimit).toBe("daily");
     expect(first.activities).toBeGreaterThan(0);
     expect(h.budget.readsToday()).toBeLessThanOrEqual(15);
     const progress = h.backfill.progress();
@@ -261,5 +262,29 @@ describe("Backfill", () => {
     h.db.prepare("DELETE FROM backup_files").run();
     h.db.prepare("DELETE FROM activities").run();
     expect((await h.backfill.runBatch()).stopped).toBe("error");
+  });
+
+  it("names the cap that stopped it: cameld's 15-minute cap or Strava's app-wide limit", async () => {
+    h = await createHarness({
+      settings: {
+        backfill: { mode: "backup_only", pageSize: 2, dailyReads: 100, fifteenMinuteReads: 3 },
+      },
+    });
+    for (let day = 0; day < 3; day += 1) addOuting(h.world, { day });
+    h.clock.t += 10 * DAY;
+    const capped = await h.backfill.runBatch();
+    expect(capped).toMatchObject({ stopped: "budget", budgetLimit: "fifteen_minute" });
+    expect(h.budget.usage()).toMatchObject({
+      fifteenMinuteUsed: 3,
+      fifteenMinuteReads: 3,
+      remaining: 0,
+      limitedBy: "fifteen_minute",
+    });
+    h.clock.t += DAY;
+    h.world.failStatus = () => 429;
+    const limited = await h.backfill.runBatch();
+    expect(limited).toMatchObject({ stopped: "rate_limited", budgetLimit: null });
+    expect(limited.error).toMatch(/rate limit/);
+    h.world.failStatus = undefined;
   });
 });
