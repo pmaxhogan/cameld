@@ -56,7 +56,7 @@ jobs:
       # Build to the local daemon first so the smoke test runs the exact image
       # that would be pushed.
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: false
@@ -103,7 +103,7 @@ jobs:
         run: docker rm -f cameld-smoke || true
 
       - name: Push image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
