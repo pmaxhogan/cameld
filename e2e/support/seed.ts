@@ -14,6 +14,8 @@ import { writeOnce } from "../../server/dist/backup-store.js";
 import { migrate, openDatabase } from "../../server/dist/db.js";
 import {
   appendEvent,
+  beginWrite,
+  finishWrite,
   insertGroup,
   patchGroup,
   setActivityFields,
@@ -219,7 +221,77 @@ export async function seed(dataDir: string): Promise<void> {
     hidden.start,
   );
 
-  // 4. A dry-run report with one entry of each kind.
+  // 4. Path B parked: the merge is built and stored, Strava rejected its
+  // upload as a duplicate, and deletion is off, so both originals stay.
+  const parked: Pair = { appId: 9_000_000_401, fitbitId: 9_000_000_402, start: START + 3 * DAY_MS };
+  await addPair(db, root, parked, 3);
+  insertGroup(
+    db,
+    {
+      id: SEED.parkedGroup,
+      appIds: [parked.appId],
+      fitbitIds: [parked.fitbitId],
+      startMs: parked.start,
+    },
+    parked.start,
+  );
+  const mergedPath = `merges/${SEED.parkedGroup}/merged.fit`;
+  await writeOnce(
+    join(root, mergedPath),
+    writeFitActivity(loop(parked.start, 600, 0, true), { sport: "running" }),
+  );
+  const externalId = `cameld-merge-${SEED.parkedGroup}`;
+  const parkedSteps: [string, string, string, unknown][] = [
+    ["detected", "backed_up", "backup_verified", { members: [] }],
+    ["backed_up", "scored", "auto_match", { decision: "auto" }],
+    ["scored", "built", "no_loss_ok", { points: 600, noLoss: { ok: true } }],
+    ["built", "snapshotted", "snapshot", { snapshot: "synthetic@cameld-merge" }],
+    [
+      "snapshotted",
+      "b_rejected",
+      "upload_duplicate",
+      { kind: "duplicate", duplicateOf: parked.appId, error: "duplicate of a synthetic activity" },
+    ],
+    ["b_rejected", "parked", "deletion_switch_off", null],
+  ];
+  parkedSteps.forEach(([from, to, event, evidence], i) => {
+    appendEvent(
+      db,
+      SEED.parkedGroup,
+      parked.start + (i + 1) * 60_000,
+      from as never,
+      to as never,
+      event,
+      evidence,
+    );
+  });
+  const upload = beginWrite(
+    db,
+    { groupId: SEED.parkedGroup, kind: "upload", targetId: null, externalId },
+    parked.start + 5 * 60_000,
+  );
+  finishWrite(
+    db,
+    upload,
+    "rejected",
+    { duplicateOf: parked.appId, error: "duplicate of a synthetic activity" },
+    parked.start + 5 * 60_000 + 30_000,
+  );
+  patchGroup(
+    db,
+    SEED.parkedGroup,
+    {
+      status: "parked",
+      path: "B",
+      parkedReason: "deletion_switch_off",
+      resumeStatus: "b_rejected",
+      mergedPath,
+      match: matchSummary(parked, 3),
+    },
+    parked.start + 6 * 60_000,
+  );
+
+  // 5. A dry-run report with one entry of each kind.
   const report = db.prepare(
     "INSERT INTO dry_run_report (group_key, start_ms, decision, report, created_at) VALUES (?, ?, ?, ?, ?)",
   );
@@ -249,7 +321,7 @@ export async function seed(dataDir: string): Promise<void> {
     START,
   );
 
-  // 5. Writes are frozen, so the banner and unfreeze can be exercised.
+  // 6. Writes are frozen, so the banner and unfreeze can be exercised.
   db.prepare(
     "INSERT INTO freeze (id, frozen, reason, evidence, frozen_at) VALUES (1, 1, ?, 'null', ?)",
   ).run(SEED.frozenReason, START);
