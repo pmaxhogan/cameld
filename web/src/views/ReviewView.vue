@@ -5,6 +5,7 @@ import Tag from "primevue/tag";
 import { onMounted, ref } from "vue";
 import { apiGet, errorText } from "../api.ts";
 import { fmtTime, readMetrics, severityOf } from "../format.ts";
+import { parkLabel, statusLabel } from "../labels.ts";
 import ReviewDetail from "./ReviewDetail.vue";
 
 defineProps<{ styleUrl: string | null }>();
@@ -58,7 +59,9 @@ onMounted(load);
           <span>{{ fmtTime(item.startMs) }}</span>
           <span>{{ item.name ?? item.sportType ?? item.id }}</span>
           <Tag :value="readMetrics(item.match).decision" :severity="severityOf(item.status)" />
-          <span class="muted">{{ item.parkedReason ?? item.status }}</span>
+          <span class="muted">{{
+            item.parkedReason === null ? statusLabel(item.status) : parkLabel(item.parkedReason)
+          }}</span>
         </button>
       </li>
     </ul>
@@ -93,6 +96,15 @@ onMounted(load);
   color: inherit;
   text-align: left;
   cursor: pointer;
+}
+@media (max-width: 40rem) {
+  .item {
+    grid-template-columns: 1fr auto;
+  }
+}
+.item > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .item.active {
   border-color: #2563eb;

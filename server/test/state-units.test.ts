@@ -165,14 +165,32 @@ describe("ReadBudget", () => {
       () => ({ dailyReads: 3, fifteenMinuteReads: 2 }),
       () => now,
     );
+    expect(budget.usage()).toEqual({
+      dailyReads: 3,
+      fifteenMinuteReads: 2,
+      dailyUsed: 0,
+      fifteenMinuteUsed: 0,
+      remaining: 2,
+      limitedBy: "fifteen_minute",
+    });
     budget.beforeRead();
     budget.beforeRead();
     expect(budget.remaining()).toBe(0);
-    expect(() => budget.beforeRead()).toThrow(BudgetExhaustedError);
+    expect(budget.readsThisWindow()).toBe(2);
+    expect(() => budget.beforeRead()).toThrow(
+      expect.objectContaining({
+        window: "fifteen_minute",
+        message: expect.stringMatching(/15-minute/),
+      }),
+    );
     now += 15 * 60_000;
+    expect(budget.readsThisWindow()).toBe(0);
     budget.beforeRead();
     expect(budget.readsToday()).toBe(3);
     expect(() => budget.beforeRead()).toThrow(BudgetExhaustedError);
+    expect(() => budget.beforeRead()).toThrow(
+      expect.objectContaining({ window: "daily", message: expect.stringMatching(/daily/) }),
+    );
     const keys = (
       db.prepare("SELECT window_key FROM backfill_budget").all() as { window_key: string }[]
     )
@@ -247,7 +265,7 @@ describe("WebGate", () => {
 describe("isTransient", () => {
   it("treats auth, budget and upload timeouts as transient", () => {
     expect(isTransient(new StravaAuthError("network"))).toBe(true);
-    expect(isTransient(new BudgetExhaustedError("x"))).toBe(true);
+    expect(isTransient(new BudgetExhaustedError("daily"))).toBe(true);
     expect(isTransient(new UploadTimeoutError(1))).toBe(true);
   });
 });

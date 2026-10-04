@@ -9,8 +9,26 @@ import type { DatabaseSync } from "node:sqlite";
  * headroom.
  */
 
+/** Which of the backfill's own caps applies (not Strava's app-wide limits). */
+export type BudgetWindow = "daily" | "fifteen_minute";
+
 export class BudgetExhaustedError extends Error {
   override readonly name = "BudgetExhaustedError";
+  /** The cap that ran out. */
+  readonly window: BudgetWindow;
+  constructor(window: BudgetWindow) {
+    super(`backfill read budget exhausted (${window === "daily" ? "daily" : "15-minute"} cap)`);
+    this.window = window;
+  }
+}
+
+export interface BudgetUsage {
+  dailyReads: number;
+  fifteenMinuteReads: number;
+  dailyUsed: number;
+  fifteenMinuteUsed: number;
+  remaining: number;
+  limitedBy: BudgetWindow;
 }
 
 /** Called before every API read made on behalf of a budgeted job. */
@@ -54,22 +72,42 @@ export class ReadBudget implements ReadGate {
     return this.#reads(dayKey(this.#now()));
   }
 
-  /** Reads still allowed now (the smaller of the two windows). */
-  remaining(): number {
-    const now = this.#now();
-    const limits = this.#limits();
-    return Math.max(
-      0,
-      Math.min(
-        limits.dailyReads - this.#reads(dayKey(now)),
-        limits.fifteenMinuteReads - this.#reads(windowKey(now)),
-      ),
-    );
+  /** Reads spent in the current 15-minute window. */
+  readsThisWindow(): number {
+    return this.#reads(windowKey(this.#now()));
   }
 
-  /** Spend one read, or throw BudgetExhaustedError without spending. */
+  /**
+   * Caps, reads spent in each window, and what is left now. `limitedBy` is
+   * the window with less headroom (daily on a tie), which is the one that
+   * stops the backfill when `remaining` reaches 0.
+   */
+  usage(): BudgetUsage {
+    const now = this.#now();
+    const limits = this.#limits();
+    const dailyUsed = this.#reads(dayKey(now));
+    const fifteenMinuteUsed = this.#reads(windowKey(now));
+    const daily = limits.dailyReads - dailyUsed;
+    const fifteen = limits.fifteenMinuteReads - fifteenMinuteUsed;
+    return {
+      dailyReads: limits.dailyReads,
+      fifteenMinuteReads: limits.fifteenMinuteReads,
+      dailyUsed,
+      fifteenMinuteUsed,
+      remaining: Math.max(0, Math.min(daily, fifteen)),
+      limitedBy: daily <= fifteen ? "daily" : "fifteen_minute",
+    };
+  }
+
+  /** Reads still allowed now (the smaller of the two windows). */
+  remaining(): number {
+    return this.usage().remaining;
+  }
+
+  /** Spend one read, or throw BudgetExhaustedError (naming the cap) without spending. */
   beforeRead(): void {
-    if (this.remaining() <= 0) throw new BudgetExhaustedError("backfill read budget exhausted");
+    const usage = this.usage();
+    if (usage.remaining <= 0) throw new BudgetExhaustedError(usage.limitedBy);
     const now = this.#now();
     const bump = this.#db.prepare(
       `INSERT INTO backfill_budget (window_key, reads) VALUES (?, 1)

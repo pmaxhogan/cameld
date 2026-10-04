@@ -229,8 +229,14 @@ daily batches inside the rate limits.
 - **Web UI.** Review queue with side-by-side and overlay map comparison of
   both tracks and the merge preview (built in memory exactly as the state
   machine would); activity and merge history with the per-group event
-  timeline, evidence, write journal and a restore action; backfill control
-  and status (rate budget, login health, progress, the dry-run report);
+  timeline (plain-language labels, evidence as key/values with the raw
+  JSON behind a toggle), write journal, links to the activities on Strava,
+  a restore action, and the same track comparison for any group whose merge
+  is built (both originals and the stored merged FIT, read from the backup);
+  backfill control and status (Strava's app-wide rate usage, which other
+  consumers of the Strava app share, shown apart from cameld's own backfill
+  read budget and which cap stopped the last batch; login health, progress,
+  the dry-run report);
   settings (grace period, partner wait, thresholds, switches for hide,
   delete, upload and the deletion trial); a "Strava login" panel that embeds
   the browser sidecar's KasmVNC client. Maps use a keyless MapLibre style

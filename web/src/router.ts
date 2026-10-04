@@ -6,22 +6,36 @@ export type Route =
   | { name: "history"; groupId: string | null }
   | { name: "backfill" }
   | { name: "settings" }
-  | { name: "browser" };
+  | { name: "browser" }
+  | { name: "not_found"; path: string };
 
-/** Maps a location.hash ("#/history/abc") to a route. Anything unknown is the review queue. */
+/**
+ * Maps a location.hash ("#/history/abc") to a route. An empty hash is the
+ * review queue; anything unknown is the not-found view (never silently the
+ * queue, so a mistyped link is noticed).
+ */
 export function parseHash(hash: string): Route {
-  const parts = hash.replace(/^#\/?/, "").split("/");
-  const [head, id] = parts;
+  const path = hash.replace(/^#\/?/, "").replace(/\/$/, "");
+  const [head, id, ...rest] = path.split("/");
   switch (head) {
+    case "":
+    case "review":
+      if (id === undefined) return { name: "review" };
+      break;
     case "history":
-      return { name: "history", groupId: id ? decodeURIComponent(id) : null };
+      if (rest.length > 0) break;
+      try {
+        return { name: "history", groupId: id ? decodeURIComponent(id) : null };
+      } catch {
+        break; // malformed percent-encoding
+      }
     case "backfill":
     case "settings":
     case "browser":
-      return { name: head };
-    default:
-      return { name: "review" };
+      if (id === undefined) return { name: head };
+      break;
   }
+  return { name: "not_found", path };
 }
 
 export function groupHref(id: string): string {

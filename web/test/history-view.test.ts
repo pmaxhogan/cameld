@@ -12,7 +12,9 @@ afterEach(() => {
 });
 
 async function mountHistory(groupId: string | null): Promise<void> {
-  const wrapper = mountUi(HistoryView, { props: { counts: { review: 1, done: 3 }, groupId } });
+  const wrapper = mountUi(HistoryView, {
+    props: { counts: { review: 1, done: 3 }, groupId, styleUrl: null },
+  });
   unmount = () => wrapper.unmount();
   await flushPromises();
 }
@@ -20,13 +22,21 @@ async function mountHistory(groupId: string | null): Promise<void> {
 describe("HistoryView", () => {
   it("lists groups and filters by status", async () => {
     const { calls } = stubApi({
-      "GET /api/groups?limit=200": { body: [group(), group({ id: "g-2" })] },
+      "GET /api/groups?limit=200": {
+        body: [group(), group({ id: "g-2", status: "parked", parkedReason: null })],
+      },
       "GET /api/groups?limit=200&status=done": { body: [] },
     });
     await mountHistory(null);
     const rows = allByTestId("history-row");
     expect(rows).toHaveLength(2);
     expect(rows[1]!.getAttribute("href")).toBe("#/history/g-2");
+    const table = byTestId("history-table")!;
+    expect(table.closest(".table-scroll")).not.toBeNull();
+    expect(table.textContent).toContain("Needs review");
+    expect(table.textContent).toContain("1 phone, 1 wrist");
+    const tags = [...table.querySelectorAll(".p-tag")].map((t) => t.getAttribute("title"));
+    expect(tags).toEqual(["alignment_uncertain", "parked"]);
     const options = [...(byTestId("history-filter") as HTMLSelectElement).options];
     expect(options.map((o) => o.value)).toEqual(["", "done", "review"]);
     setValue("history-filter", "done");

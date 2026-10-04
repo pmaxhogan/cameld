@@ -1,8 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { buildPatch, fieldValues, readPath, setPath, switchValues } from "../src/settings-form.ts";
+import {
+  FIELDS,
+  SWITCHES,
+  buildPatch,
+  fieldValues,
+  percentHint,
+  readPath,
+  setPath,
+  switchValues,
+} from "../src/settings-form.ts";
 import { settings } from "./fixtures.ts";
 
 describe("settings form", () => {
+  it("explains every field and switch", () => {
+    for (const def of [...FIELDS, ...SWITCHES]) expect(def.help.length).toBeGreaterThan(20);
+    const tolerance = FIELDS.find((f) => f.id === "uploadTolerance")!;
+    expect(tolerance.label).toContain("0.05 = 5%");
+    expect(tolerance.fraction).toBe(true);
+    const help = (id: string) => SWITCHES.find((s) => s.id === id)!.help;
+    expect(help("hide")).toContain("post-upload check");
+    expect(help("delete")).toContain("Path B");
+    expect(help("trial")).toContain("{maxPairs}");
+  });
+
+  it("shows fractions as percentages", () => {
+    expect(percentHint(0.05)).toBe("= 5%");
+    expect(percentHint(0.0125)).toBe("= 1.25%");
+    expect(percentHint("")).toBe("");
+    expect(percentHint(undefined)).toBe("");
+  });
+
   it("reads and writes nested paths", () => {
     const target: Record<string, unknown> = { a: { keep: 1 } };
     setPath(target, ["a", "b", "c"], 5);

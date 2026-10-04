@@ -13,10 +13,10 @@ import {
 import { isTransient, type MergeMachine } from "../state/machine.ts";
 import { requireActivity, setActivityFields, upsertActivity } from "../state/repo.ts";
 import { type BackfillMode, matchSettingsOf, type SettingsStore } from "../state/settings.ts";
-import { StravaApiError, type StravaClient } from "../strava/client.ts";
+import { StravaApiError, type StravaClient, StravaRateLimitedError } from "../strava/client.ts";
 import type { Clock } from "../strava/rate-limiter.ts";
 import type { BackupService } from "./backup.ts";
-import { BudgetExhaustedError, type ReadBudget } from "./budget.ts";
+import { BudgetExhaustedError, type BudgetWindow, type ReadBudget } from "./budget.ts";
 import type { BackfillProgress } from "./metrics.ts";
 
 /**
@@ -54,7 +54,13 @@ export interface BackfillOptions {
 
 export interface BatchResult {
   mode: BackfillMode;
-  stopped: "off" | "paused" | "budget" | "done" | "error" | "running";
+  /**
+   * Why the batch ended. "budget" is cameld's own read cap (see budgetLimit);
+   * "rate_limited" is Strava's app-wide limit (a 429, all consumers count).
+   */
+  stopped: "off" | "paused" | "budget" | "rate_limited" | "done" | "error" | "running";
+  /** With stopped "budget": which of cameld's caps ran out. */
+  budgetLimit: BudgetWindow | null;
   activities: number;
   groups: number;
   error: string | null;
@@ -135,7 +141,14 @@ export class Backfill {
   async runBatch(): Promise<BatchResult> {
     const settings = this.#o.settings.get().backfill;
     const mode = settings.mode;
-    const result: BatchResult = { mode, stopped: "off", activities: 0, groups: 0, error: null };
+    const result: BatchResult = {
+      mode,
+      stopped: "off",
+      budgetLimit: null,
+      activities: 0,
+      groups: 0,
+      error: null,
+    };
     if (mode === "off") return result;
     if (settings.paused) return { ...result, stopped: "paused" };
     if (this.#running) return { ...result, stopped: "running" };
@@ -191,6 +204,10 @@ export class Backfill {
     } catch (error) {
       if (error instanceof BudgetExhaustedError) {
         result.stopped = "budget";
+        result.budgetLimit = error.window;
+      } else if (error instanceof StravaRateLimitedError) {
+        result.stopped = "rate_limited";
+        result.error = error.message;
       } else {
         result.stopped = "error";
         result.error = (error as Error).message;

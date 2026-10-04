@@ -40,13 +40,19 @@ test("review queue: compares the tracks and approves with a note", async ({ sign
 
 test("history: event timeline, evidence and the restore action", async ({ signedIn: page }) => {
   await page.getByTestId("nav-history").click();
-  await expect(page.getByTestId("history-row")).toHaveCount(3);
+  await expect(page.getByTestId("history-row")).toHaveCount(4);
   await page.goto(`/#/history/${SEED.doneGroup}`);
   const detail = page.getByTestId("group-detail");
   await expect(detail).toBeVisible();
   await expect(page.getByTestId("event-item")).toHaveCount(12);
   await expect(page.getByTestId("event-timeline")).toContainText("confirmed");
   await expect(page.getByTestId("members-table")).toContainText("9000000201");
+  await expect(page.getByTestId("member-link").first()).toHaveAttribute(
+    "href",
+    "https://www.strava.com/activities/9000000201",
+  );
+  await expect(page.getByTestId("group-title")).toContainText("Run, 1 phone + 1 wrist");
+  await expect(page.getByTestId("group-id")).toHaveText(SEED.doneGroup);
   await page.getByTestId("restore-button").click();
   await page.getByTestId("restore-reason").fill("synthetic restore drill");
   await page.getByTestId("restore-confirm").click();
@@ -54,11 +60,51 @@ test("history: event timeline, evidence and the restore action", async ({ signed
   await expect(page.getByTestId("restore-error")).toContainText(/strava/i);
 });
 
+test("history: a parked Path B pair explains itself and compares its tracks", async ({
+  signedIn: page,
+}) => {
+  await page.goto(`/#/history/${SEED.parkedGroup}`);
+  await expect(page.getByTestId("parked-reason")).toContainText(
+    "Parked: deletion is off, so both originals were left in place on Strava",
+  );
+  await expect(page.getByTestId("event-timeline")).toContainText(
+    "Strava rejected the merged upload as a duplicate of the original",
+  );
+  await expect(page.getByTestId("write-target")).toHaveText(`cameld-merge-${SEED.parkedGroup}`);
+  const comparison = page.getByTestId("track-comparison");
+  await expect(comparison).toBeVisible();
+  await expect(page.getByTestId("map-overlay")).toBeVisible();
+  await expect(comparison).toContainText("merged");
+  await expect(page.getByTestId("track-notes")).toBeHidden();
+  const toggle = page.getByTestId("toggle-merged");
+  await toggle.uncheck();
+  await expect(toggle).not.toBeChecked();
+  const tracks = (await api(page, `/api/groups/${SEED.parkedGroup}/tracks`)) as {
+    app: { points: number } | null;
+    fitbit: { points: number } | null;
+    merged: { label: string; points: number } | null;
+  };
+  expect(tracks.app?.points).toBe(600);
+  expect(tracks.fitbit?.points).toBe(600);
+  expect(tracks.merged).toMatchObject({ label: "merged", points: 600 });
+});
+
+test("routing: an unknown page says so and links back", async ({ signedIn: page }) => {
+  await page.goto("/#/no-such-page");
+  await expect(page.getByTestId("not-found")).toContainText("Page not found");
+  await expect(page.getByTestId("review-empty")).toBeHidden();
+  await page.getByTestId("not-found").getByRole("link", { name: "History" }).click();
+  await expect(page.getByTestId("history-table")).toBeVisible();
+});
+
 test("backfill: budget, login health, progress and the dry-run report", async ({
   signedIn: page,
 }) => {
   await page.getByTestId("nav-backfill").click();
-  await expect(page.getByTestId("rate-budget")).toBeVisible();
+  await expect(page.getByTestId("rate-budget")).toContainText("Strava app usage (all consumers)");
+  await expect(page.getByTestId("cameld-budget-daily")).toContainText("0 / 600, 600 left");
+  await expect(page.getByTestId("cameld-budget-fifteen")).toContainText("0 / 70, 70 left");
+  await expect(page.getByTestId("budget-left")).toContainText("70 reads now");
   await expect(page.getByTestId("login-health")).toContainText(/unhealthy|no_browser|not/i);
   await expect(page.getByTestId("backfill-progress")).toBeVisible();
   const table = page.getByTestId("dry-run-table");

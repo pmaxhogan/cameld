@@ -48,6 +48,15 @@ describe("SettingsView", () => {
     });
     expect((byTestId("setting-grace-hours") as HTMLInputElement).value).toBe("48");
     expect(document.body.textContent).toContain("Deletion trial: off, up to 3 pairs");
+    expect(byTestId("switch-trial-help")?.textContent).toContain("at most 3 pairs");
+    expect(byTestId("switch-delete-help")?.textContent).toContain("Path B");
+    expect(byTestId("switch-hide-help")?.textContent).toContain("post-upload check");
+    expect(byTestId("setting-upload-tolerance-percent")?.textContent).toBe("= 2%");
+    expect(byTestId("setting-auto-overlap-percent")?.textContent).toBe("= 80%");
+    expect(byTestId("setting-grace-hours-percent")).toBeNull();
+    const input = byTestId("setting-upload-tolerance")!;
+    const helpId = input.getAttribute("aria-describedby")!;
+    expect(document.getElementById(helpId)?.textContent).toContain("Strava resamples");
     setValue("setting-grace-hours", "24");
     toggle("switch-hide");
     await flushPromises();

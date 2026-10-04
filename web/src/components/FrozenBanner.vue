@@ -50,7 +50,12 @@ async function submit(): Promise<void> {
       data-testid="unfreeze-button"
       @click="show"
     />
-    <Dialog v-model:visible="open" modal header="Unfreeze cameld" :style="{ width: '32rem' }">
+    <Dialog
+      v-model:visible="open"
+      modal
+      header="Unfreeze cameld"
+      :style="{ width: '32rem', maxWidth: '95vw' }"
+    >
       <p>
         Writes resume after this. Only unfreeze once you understand why it froze. The reason is
         recorded in the audit log.
@@ -80,12 +85,21 @@ async function submit(): Promise<void> {
 <style scoped>
 .frozen {
   display: flex;
-  gap: 1rem;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
   align-items: center;
   justify-content: space-between;
   padding: 0.75rem 1rem;
   background: #b91c1c;
   color: #fff;
+}
+.frozen > div {
+  flex: 1 1 14rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.frozen > :deep(button) {
+  flex-shrink: 0;
 }
 .when {
   opacity: 0.85;

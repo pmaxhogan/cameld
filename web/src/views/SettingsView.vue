@@ -11,6 +11,7 @@ import {
   SWITCHES,
   buildPatch,
   fieldValues,
+  percentHint,
   readPath,
   setPath,
   switchValues,
@@ -118,10 +119,13 @@ onMounted(async () => {
         <ToggleSwitch
           :model-value="toggles[sw.id]"
           :input-id="`switch-${sw.id}`"
-          :pt="{ input: { 'data-testid': sw.testid } }"
+          :pt="{ input: { 'data-testid': sw.testid, 'aria-describedby': `switch-help-${sw.id}` } }"
           @update:model-value="onToggle(sw, $event)"
         />
         <label :for="`switch-${sw.id}`">{{ sw.label }}</label>
+        <small :id="`switch-help-${sw.id}`" class="help" :data-testid="`${sw.testid}-help`">
+          {{ sw.help.replace("{maxPairs}", String(settings.trial.maxPairs)) }}
+        </small>
       </div>
       <p class="muted">
         Deletion trial: {{ settings.trial.enabled ? "on" : "off" }}, up to
@@ -130,16 +134,24 @@ onMounted(async () => {
 
       <h3>Timing and thresholds</h3>
       <div class="fields">
-        <label v-for="field in FIELDS" :key="field.id">
-          <span>{{ field.label }}</span>
-          <input
-            v-model="values[field.id]"
-            type="number"
-            step="any"
-            class="p-inputtext"
-            :data-testid="field.testid"
-          />
-        </label>
+        <div v-for="field in FIELDS" :key="field.id" class="field">
+          <label :for="`field-${field.id}`">{{ field.label }}</label>
+          <span class="input-row">
+            <input
+              :id="`field-${field.id}`"
+              v-model="values[field.id]"
+              type="number"
+              step="any"
+              class="p-inputtext"
+              :aria-describedby="`field-help-${field.id}`"
+              :data-testid="field.testid"
+            />
+            <span v-if="field.fraction" class="hint" :data-testid="`${field.testid}-percent`">{{
+              percentHint(values[field.id])
+            }}</span>
+          </span>
+          <small :id="`field-help-${field.id}`" class="help">{{ field.help }}</small>
+        </div>
       </div>
       <Button label="Save" :disabled="busy" data-testid="settings-save" @click="save" />
     </template>
@@ -162,20 +174,54 @@ onMounted(async () => {
 
 <style scoped>
 .switch {
-  display: flex;
-  gap: 0.75rem;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 0.75rem;
+  row-gap: 0.15rem;
   align-items: center;
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.75rem;
+  max-width: 48rem;
+}
+.switch .help {
+  grid-column: 2;
 }
 .fields {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
-  gap: 0.75rem 1.5rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(18rem, 100%), 1fr));
+  gap: 0.25rem 1.5rem;
   margin-bottom: 1rem;
 }
-.fields label {
+/* Label, input and help line up across a row whatever each label's length. */
+.field {
   display: grid;
-  gap: 0.25rem;
+  grid-row: span 3;
+  grid-template-rows: subgrid;
+  row-gap: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+.field label {
+  align-self: end;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.input-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.input-row input {
+  flex: 1;
+  min-width: 0;
+}
+.hint {
+  font-size: 0.85rem;
+  opacity: 0.75;
+  white-space: nowrap;
+}
+.help {
+  font-size: 0.8rem;
+  opacity: 0.75;
+  line-height: 1.3;
 }
 .muted {
   opacity: 0.75;

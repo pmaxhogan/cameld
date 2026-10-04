@@ -9,6 +9,7 @@ import {
 } from "@cameld/shared";
 import Button from "primevue/button";
 import Dialog from "primevue/dialog";
+import InputText from "primevue/inputtext";
 import Message from "primevue/message";
 import ProgressBar from "primevue/progressbar";
 import Tag from "primevue/tag";
@@ -16,9 +17,13 @@ import { computed, onMounted, ref } from "vue";
 import { apiGet, apiPatch, apiPost, errorText, isFailure } from "../api.ts";
 import PhraseConfirmDialog from "../components/PhraseConfirmDialog.vue";
 import { fmtTime, usagePct } from "../format.ts";
+import { BUDGET_WINDOW_LABELS, stoppedLabel } from "../labels.ts";
 import DryRunTable from "./DryRunTable.vue";
 
 const props = defineProps<{ status: ApiStatus }>();
+
+/** Typed back before the cursor is reset. */
+const RESET_PHRASE = "reset";
 
 const info = ref<BackfillInfo>(props.status.backfill);
 const mode = ref<BackfillMode>(info.value.mode);
@@ -27,17 +32,38 @@ const fifteenMinuteReads = ref<number | string>(info.value.budget.fifteenMinuteR
 const notice = ref<{ ok: boolean; text: string } | null>(null);
 const busy = ref(false);
 const resetOpen = ref(false);
+const resetTyped = ref("");
 const phraseOpen = ref(false);
 const phraseError = ref<string | null>(null);
 
+/** Strava's own counters: the whole Strava app, shared with other consumers. */
 const rateRows = computed(() => {
   const rate = props.status.rate;
   if (rate === null) return null;
   return [
-    { label: "Read, 15 min", window: rate.read.fifteenMinute },
-    { label: "Read, day", window: rate.read.day },
     { label: "Overall, 15 min", window: rate.overall.fifteenMinute },
     { label: "Overall, day", window: rate.overall.day },
+    { label: "Read, 15 min", window: rate.read.fifteenMinute },
+    { label: "Read, day", window: rate.read.day },
+  ];
+});
+
+/** cameld's own backfill caps (settings), spent only by the backfill. */
+const budgetRows = computed(() => {
+  const b = info.value.budget;
+  return [
+    {
+      id: "fifteen",
+      label: "15 min",
+      window: { usage: b.fifteenMinuteUsed, limit: b.fifteenMinuteReads },
+      left: Math.max(0, b.fifteenMinuteReads - b.fifteenMinuteUsed),
+    },
+    {
+      id: "daily",
+      label: "Today",
+      window: { usage: b.dailyUsed, limit: b.dailyReads },
+      left: Math.max(0, b.dailyReads - b.dailyUsed),
+    },
   ];
 });
 
@@ -93,6 +119,11 @@ async function saveConfirmed(phrase: string): Promise<void> {
   }
 }
 
+function openReset(): void {
+  resetTyped.value = "";
+  resetOpen.value = true;
+}
+
 async function control(action: BackfillControl["action"]): Promise<void> {
   await act(
     () => apiPost<BackfillInfo>("/api/backfill/control", { action }),
@@ -123,7 +154,10 @@ onMounted(async () => {
 
     <div class="cards">
       <div class="card" data-testid="rate-budget">
-        <h3>Strava rate budget</h3>
+        <h3>Strava app usage (all consumers)</h3>
+        <p class="note">
+          Strava's own counters for the whole Strava app, which other consumers share. Used / limit.
+        </p>
         <p v-if="rateRows === null">No Strava data yet</p>
         <template v-else>
           <div v-for="row in rateRows" :key="row.label" class="rate">
@@ -132,6 +166,34 @@ onMounted(async () => {
             <span>{{ row.window.usage }} / {{ row.window.limit }}</span>
           </div>
         </template>
+      </div>
+
+      <div class="card" data-testid="cameld-budget">
+        <h3>cameld budget (backfill only)</h3>
+        <p class="note">
+          cameld's own caps on backfill reads, set below. Used / cap, and what is left.
+        </p>
+        <div
+          v-for="row in budgetRows"
+          :key="row.id"
+          class="rate"
+          :data-testid="`cameld-budget-${row.id}`"
+        >
+          <span>{{ row.label }}</span>
+          <ProgressBar :value="usagePct(row.window)" :show-value="false" />
+          <span>{{ row.window.usage }} / {{ row.window.limit }}, {{ row.left }} left</span>
+        </div>
+        <dl>
+          <dt>Reads today</dt>
+          <dd data-testid="reads-today">
+            {{ info.budget.dailyUsed }} of {{ info.budget.dailyReads }} (cameld daily cap)
+          </dd>
+          <dt>Budget left</dt>
+          <dd data-testid="budget-left">
+            {{ info.budget.remaining }} reads now (limited by the
+            {{ BUDGET_WINDOW_LABELS[info.budget.limitedBy] }})
+          </dd>
+        </dl>
       </div>
 
       <div class="card" data-testid="login-health">
@@ -153,16 +215,12 @@ onMounted(async () => {
           <dd>{{ fmtTime(info.progress.cursorMs) }}</dd>
           <dt>Done</dt>
           <dd>{{ info.progress.done ? "yes" : "no" }}</dd>
-          <dt>Reads today</dt>
-          <dd>{{ info.progress.readsToday }}</dd>
           <dt>Running</dt>
           <dd>{{ info.running ? "yes" : "no" }}{{ info.paused ? " (paused)" : "" }}</dd>
-          <dt>Budget left</dt>
-          <dd>{{ info.budget.remaining }}</dd>
         </dl>
         <p v-if="info.lastBatch" data-testid="backfill-last-batch">
           Last batch ({{ info.lastBatch.mode }}): {{ info.lastBatch.activities }} activities,
-          {{ info.lastBatch.groups }} groups, stopped: {{ info.lastBatch.stopped
+          {{ info.lastBatch.groups }} groups, stopped: {{ stoppedLabel(info.lastBatch)
           }}{{ info.lastBatch.error ? `, error: ${info.lastBatch.error}` : "" }}
         </p>
       </div>
@@ -176,7 +234,7 @@ onMounted(async () => {
         </select>
       </label>
       <label>
-        Reads per day
+        cameld reads per day
         <input
           v-model="dailyReads"
           type="number"
@@ -186,7 +244,7 @@ onMounted(async () => {
         />
       </label>
       <label>
-        Reads per 15 min
+        cameld reads per 15 min
         <input
           v-model="fifteenMinuteReads"
           type="number"
@@ -212,20 +270,44 @@ onMounted(async () => {
         data-testid="backfill-pause"
         @click="control(info.paused ? 'resume' : 'pause')"
       />
+    </div>
+
+    <DryRunTable :mode="info.mode" />
+
+    <div class="danger" data-testid="backfill-danger">
+      <h3>Danger zone</h3>
+      <p class="note">
+        Resetting the cursor makes the backfill walk the whole history again from the newest
+        activity. Backups already taken are kept, but every activity costs reads again.
+      </p>
       <Button
-        label="Reset cursor"
+        label="Reset cursor..."
         severity="danger"
-        text
+        outlined
+        size="small"
         :disabled="busy"
         data-testid="backfill-reset"
-        @click="resetOpen = true"
+        @click="openReset"
       />
     </div>
 
-    <DryRunTable />
-
-    <Dialog v-model:visible="resetOpen" modal header="Reset backfill cursor">
+    <Dialog
+      v-model:visible="resetOpen"
+      modal
+      header="Reset backfill cursor"
+      :style="{ width: '30rem', maxWidth: '95vw' }"
+    >
       <p>The backfill starts again from the newest activity. Backups already taken are kept.</p>
+      <p>
+        Type <code>{{ RESET_PHRASE }}</code> to confirm.
+      </p>
+      <InputText
+        v-model="resetTyped"
+        class="full"
+        autocomplete="off"
+        :placeholder="RESET_PHRASE"
+        data-testid="backfill-reset-input"
+      />
       <template #footer>
         <Button
           label="Cancel"
@@ -234,9 +316,9 @@ onMounted(async () => {
           @click="resetOpen = false"
         />
         <Button
-          label="Reset"
+          label="Reset cursor"
           severity="danger"
-          :disabled="busy"
+          :disabled="busy || resetTyped.trim() !== RESET_PHRASE"
           data-testid="backfill-reset-confirm"
           @click="control('reset')"
         />
@@ -259,24 +341,34 @@ onMounted(async () => {
 <style scoped>
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
   gap: 1rem;
 }
 .card {
   border: 1px solid #d1d5db;
   border-radius: 0.5rem;
   padding: 0.75rem 1rem;
+  min-width: 0;
+}
+.card h3 {
+  margin: 0 0 0.25rem;
+}
+.note {
+  margin: 0 0 0.75rem;
+  font-size: 0.8rem;
+  opacity: 0.75;
 }
 .rate {
   display: grid;
-  grid-template-columns: 7rem 1fr 6rem;
+  grid-template-columns: 6.5rem minmax(3rem, 1fr) auto;
   gap: 0.5rem;
   align-items: center;
   margin-bottom: 0.35rem;
+  font-size: 0.9rem;
 }
 dl {
   display: grid;
-  grid-template-columns: 7rem 1fr;
+  grid-template-columns: 7rem minmax(0, 1fr);
   gap: 0.15rem 0.75rem;
 }
 dd {
@@ -293,5 +385,17 @@ dd {
 .form label {
   display: grid;
   gap: 0.25rem;
+}
+.danger {
+  margin-top: 2rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #fca5a5;
+  border-radius: 0.5rem;
+}
+.danger h3 {
+  margin: 0 0 0.25rem;
+}
+.full {
+  width: 100%;
 }
 </style>

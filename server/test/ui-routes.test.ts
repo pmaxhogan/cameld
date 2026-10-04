@@ -227,12 +227,25 @@ describe("read routes", () => {
     expect(detail.restorable).toBe(true);
     expect(detail.members.map((m: { id: number }) => m.id)).toEqual([201, 202]);
     expect(detail.events.at(-1).event).toBe("confirmed");
-    expect(detail.writes[0]).toMatchObject({ kind: "delete", targetId: 201, status: "intent" });
+    expect(detail.writes[0]).toMatchObject({
+      kind: "delete",
+      targetId: 201,
+      externalId: null,
+      status: "intent",
+    });
+    expect(detail.mergeBuilt).toBe(false);
     expect((await app.inject({ url: "/api/groups/nope" })).statusCode).toBe(404);
     expect((await app.inject({ url: "/api/groups/nope/tracks" })).statusCode).toBe(404);
     const tracks = (await app.inject({ url: "/api/groups/g-review/tracks" })).json();
     expect(tracks.notes.length).toBeGreaterThan(0);
-    expect((await app.inject({ url: "/api/backfill" })).json().budget.dailyReads).toBe(600);
+    expect((await app.inject({ url: "/api/backfill" })).json().budget).toEqual({
+      dailyReads: 600,
+      fifteenMinuteReads: 70,
+      dailyUsed: 0,
+      fifteenMinuteUsed: 0,
+      remaining: 70,
+      limitedBy: "fifteen_minute",
+    });
     expect((await app.inject({ url: "/api/backfill/report" })).json().generatedAt).toBe(T0);
     expect((await app.inject({ url: "/api/audit?limit=5" })).json()).toEqual([]);
   });
@@ -242,6 +255,23 @@ describe("read routes", () => {
     db.prepare("DELETE FROM activities WHERE id = 202").run();
     const detail = (await app.inject({ url: "/api/groups/g-done" })).json();
     expect(detail.members.map((m: { id: number }) => m.id)).toEqual([201]);
+  });
+
+  it("says when the merge is built and names an upload's external_id", async () => {
+    const { app, db } = await setup();
+    patchGroup(db, "g-done", { mergedPath: "merges/g-done/merged.fit" }, T0);
+    beginWrite(
+      db,
+      { groupId: "g-done", kind: "upload", targetId: null, externalId: "cameld-merge-x" },
+      T0,
+    );
+    const detail = (await app.inject({ url: "/api/groups/g-done" })).json();
+    expect(detail.mergeBuilt).toBe(true);
+    expect(detail.writes.at(-1)).toMatchObject({
+      kind: "upload",
+      targetId: null,
+      externalId: "cameld-merge-x",
+    });
   });
 
   it("works without Strava: no machine, no backfill", async () => {

@@ -259,11 +259,7 @@ export function registerUiRoutes(api: FastifyInstance, deps: UiDeps): void {
         done: false,
         readsToday: deps.budget.readsToday(),
       },
-      budget: {
-        dailyReads: settings.dailyReads,
-        fifteenMinuteReads: settings.fifteenMinuteReads,
-        remaining: deps.budget.remaining(),
-      },
+      budget: deps.budget.usage(),
       lastBatch: last,
     };
   };
@@ -351,12 +347,14 @@ export function registerUiRoutes(api: FastifyInstance, deps: UiDeps): void {
         id: w.id,
         kind: w.kind,
         targetId: w.targetId,
+        externalId: w.externalId,
         status: w.status,
         result: w.result,
         createdAt: w.createdAt,
         completedAt: w.completedAt,
       })),
       restorable: isRestorable(group),
+      mergeBuilt: group.mergedPath !== null,
     };
     return detail;
   });

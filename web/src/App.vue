@@ -5,11 +5,13 @@ import { onBeforeUnmount, onMounted } from "vue";
 import { apiPost, onWrite, toLogin } from "./api.ts";
 import FrozenBanner from "./components/FrozenBanner.vue";
 import PushControls from "./components/PushControls.vue";
+import { shortVersion } from "./labels.ts";
 import { route, startRouter } from "./router.ts";
 import { STATUS_POLL_MS, refreshStatus, status, statusError } from "./status.ts";
 import BackfillView from "./views/BackfillView.vue";
 import BrowserView from "./views/BrowserView.vue";
 import HistoryView from "./views/HistoryView.vue";
+import NotFoundView from "./views/NotFoundView.vue";
 import ReviewView from "./views/ReviewView.vue";
 import SettingsView from "./views/SettingsView.vue";
 
@@ -49,8 +51,7 @@ async function logout(): Promise<void> {
   <div class="app">
     <header class="header">
       <strong class="brand">cameld</strong>
-      <span v-if="status" class="muted" data-testid="identity">{{ status.identity }}</span>
-      <span v-if="status" class="muted" data-testid="version">v{{ status.version }}</span>
+      <span v-if="status" class="muted identity" data-testid="identity">{{ status.identity }}</span>
       <span class="spacer"></span>
       <PushControls v-if="status?.push.configured" :public-key="status.push.publicKey ?? ''" />
       <Button label="Log out" size="small" text data-testid="logout" @click="logout" />
@@ -77,11 +78,18 @@ async function logout(): Promise<void> {
         v-else-if="route.name === 'history'"
         :counts="status.counts"
         :group-id="route.groupId"
+        :style-url="status.map.styleUrl"
       />
       <BackfillView v-else-if="route.name === 'backfill'" :status="status" />
       <SettingsView v-else-if="route.name === 'settings'" />
-      <BrowserView v-else :status="status" />
+      <BrowserView v-else-if="route.name === 'browser'" :status="status" />
+      <NotFoundView v-else :path="route.path" />
     </main>
+    <footer v-if="status" class="footer">
+      <span data-testid="version" :title="`cameld build ${status.version}`">{{
+        shortVersion(status.version)
+      }}</span>
+    </footer>
   </div>
 </template>
 
@@ -95,7 +103,8 @@ body {
 <style scoped>
 .header {
   display: flex;
-  gap: 1rem;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
   align-items: center;
   padding: 0.5rem 1rem;
   border-bottom: 1px solid #d1d5db;
@@ -110,9 +119,14 @@ body {
   opacity: 0.75;
   font-size: 0.85rem;
 }
+.identity {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .nav {
   display: flex;
-  gap: 1.25rem;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
   padding: 0.5rem 1rem;
   border-bottom: 1px solid #d1d5db;
 }
@@ -135,6 +149,13 @@ body {
   min-height: 0;
   overflow: auto;
   padding: 1rem;
+}
+.footer {
+  padding: 0.25rem 1rem;
+  font-size: 0.7rem;
+  opacity: 0.6;
+  text-align: right;
+  border-top: 1px solid #d1d5db;
 }
 .main.flush {
   padding: 0;

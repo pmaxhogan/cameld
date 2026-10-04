@@ -56,6 +56,8 @@ describe("ReviewView", () => {
     const items = allByTestId("review-item");
     expect(items).toHaveLength(2);
     expect(items[1]!.textContent).toContain("g-2");
+    expect(items[1]!.textContent).toContain("Needs review");
+    expect(items[0]!.textContent).toContain("alignment_uncertain");
     items[0]!.click();
     await flushPromises();
     for (const id of ["map-side-app", "map-side-fitbit", "map-overlay"]) {

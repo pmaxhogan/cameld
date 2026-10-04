@@ -20,7 +20,14 @@ export function backfillInfo(over: Partial<BackfillInfo> = {}): BackfillInfo {
     running: false,
     available: true,
     progress: { activities: 12, cursorMs: 1_000_000, done: false, readsToday: 34 },
-    budget: { dailyReads: 500, fifteenMinuteReads: 40, remaining: 466 },
+    budget: {
+      dailyReads: 500,
+      fifteenMinuteReads: 40,
+      dailyUsed: 34,
+      fifteenMinuteUsed: 6,
+      remaining: 34,
+      limitedBy: "fifteen_minute",
+    },
     lastBatch: null,
     ...over,
   };
@@ -178,7 +185,8 @@ export function groupDetail(over: Partial<GroupDetail> = {}): GroupDetail {
       {
         id: 1,
         kind: "upload",
-        targetId: 303,
+        targetId: null,
+        externalId: "cameld-merge-g-1",
         status: "done",
         result: null,
         createdAt: 1_550_000,
@@ -186,6 +194,7 @@ export function groupDetail(over: Partial<GroupDetail> = {}): GroupDetail {
       },
     ],
     restorable: true,
+    mergeBuilt: false,
     ...over,
   };
 }
