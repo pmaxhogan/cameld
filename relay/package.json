@@ -11,7 +11,7 @@
     "migrate:remote": "npx --yes wrangler@4 d1 migrations apply cameld-relay --remote"
   },
   "dependencies": {
-    "postal-mime": "^2.7.6"
+    "postal-mime": "^4.0.2"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260702.1"
