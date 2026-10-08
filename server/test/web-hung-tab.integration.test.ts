@@ -39,35 +39,29 @@ async function openHungTab(): Promise<CdpTarget> {
 }
 
 function open(extra: Partial<WebSessionOptions>): WebSession {
-  const session = new WebSession(
-    {
-      cdpUrl: chrome.cdpUrl,
-      baseUrl: fake.baseUrl,
-      navigationTimeoutMs: 4000,
-      operationTimeoutMs: 60_000,
-      probeTimeoutMs: 1500,
-      ...extra,
-    },
-    120_000,
-  );
+  const session = new WebSession({
+    cdpUrl: chrome.cdpUrl,
+    baseUrl: fake.baseUrl,
+    navigationTimeoutMs: 4000,
+    operationTimeoutMs: 60_000,
+    probeTimeoutMs: 1500,
+    ...extra,
+  });
   sessions.push(session);
   return session;
 }
 
 function metricsFor(): Metrics {
-  return new Metrics(
-    {
-      defaultMetrics: false,
-      sources: {
-        parkedByReason: () => ({}),
-        frozen: () => false,
-        rateUsage: () => null,
-        backupTotals: () => ({ bytes: 0, files: 0 }),
-        backfill: () => ({ activities: 0, cursorMs: null, done: false, readsToday: 0 }),
-      },
+  return new Metrics({
+    defaultMetrics: false,
+    sources: {
+      parkedByReason: () => ({}),
+      frozen: () => false,
+      rateUsage: () => null,
+      backupTotals: () => ({ bytes: 0, files: 0 }),
+      backfill: () => ({ activities: 0, cursorMs: null, done: false, readsToday: 0 }),
     },
-    120_000,
-  );
+  });
 }
 
 beforeAll(async () => {
