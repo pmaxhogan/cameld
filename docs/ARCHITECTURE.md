@@ -121,6 +121,16 @@ freeze and the owner's go-ahead are re-checked immediately before each delete.
   archived in the backup and the pair is flagged.
 - **Captcha or verification challenge** parks the affected work and pauses all
   web-session actions until login is healthy. It does not stop API backups.
+- **Hung browser tab.** When attaching over CDP fails while the browser's
+  DevTools HTTP endpoint still answers (a tab wedged after a sidecar
+  restart), the web session probes each page tab, opens `about:blank`, closes
+  only the tabs that did not answer, and reconnects once, at most once per 30
+  minutes and inside the one-operation-at-a-time queue. This is the single
+  exception to "never touch other tabs" (STRAVA-WEB.md, "Hung tabs"). If it
+  does not recover, cameld does not kill Chrome (it cannot prove the sidecar
+  relaunches it); it notifies the owner, critical, to restart the sidecar.
+  A persistent unreachable browser raises one critical notification per
+  outage, separate from the login notification.
 
 ### Common prefix
 
@@ -284,7 +294,7 @@ daily batches inside the rate limits.
 - **Notifications.** Web Push with VAPID keys (the `web-push` package),
   subscriptions in SQLite, a service worker in the SPA. Every owner
   notification is logged and pushed: writes frozen, failed merge, login
-  expired, parked pair, pair needs review, backfill batch done, deletion
+  expired, browser unreachable, hung tab closed, browser restart needed, parked pair, pair needs review, backfill batch done, deletion
   trial done, restore flagged. Subscriptions the push service reports gone
   (404/410) are deleted.
 - **Deploy.** A TrueNAS custom app that auto-pulls the latest image from GHCR,
@@ -294,7 +304,8 @@ daily batches inside the rate limits.
   structured NDJSON logs shipped to Loki, and `GET /healthz` returning
   `{ok, version}`. Metrics: merges, parked pairs, frozen state, rate-limit
   usage, backup size and count, original files by status and export outcomes,
-  last successful poll, web-session login health.
+  last successful poll, web-session login health, hung-tab remediations by
+  result (`cameld_web_remediations_total`).
   Alerts: failed merge, frozen writes, login expired, polling stalled, backup
   write failure.
 - **Configuration.** `loadConfig(process.env)` is the only environment reader.

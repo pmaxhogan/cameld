@@ -4,6 +4,15 @@ import { type Browser, chromium, errors as playwrightErrors, type Page } from "p
 import type { Logger } from "../logging.ts";
 import { RelayError, type RelayClient } from "../relay/client.ts";
 import { type Clock, systemClock } from "../strava/rate-limiter.ts";
+import {
+  CdpHttp,
+  DEFAULT_PROBE_TIMEOUT_MS,
+  DEFAULT_REMEDIATION_INTERVAL_MS,
+  type ProbeResult,
+  remediateHungTabs,
+  remediationAllowed,
+  type RemediationReport,
+} from "./cdp-remediation.ts";
 import { classify, isLoginPath, looksLikeChallenge, parseContentDisposition } from "./classify.ts";
 import { DeletionAuthorization } from "./deletion-authorization.ts";
 import {
@@ -40,8 +49,10 @@ import { activityFormHydrated, type InPageBody, inPageFetch, readActivityForm } 
  *
  * Rules this class enforces:
  * - Every operation opens a NEW page in the browser's default context and
- *   closes only that page. It never closes the browser, never touches other
- *   tabs and never logs out (`disconnect()` only drops the CDP connection;
+ *   closes only that page. It never closes the browser and never logs out.
+ *   It touches other tabs in exactly one case: when CDP attach hangs on a
+ *   wedged tab, it closes the tabs that fail a probe (cdp-remediation.ts)
+ *   after opening a blank one (`disconnect()` only drops the CDP connection;
  *   an integration test proves the browser and its cookies survive it).
  * - Operations are serialized: one page at a time, in call order.
  * - Requests are sent by cameld itself (in-page fetch, credentials included)
@@ -163,6 +174,19 @@ export interface WebSessionOptions {
   pageCloseTimeoutMs?: number;
   /** Injection point for tests. Default chromium.connectOverCDP. */
   connect?: (cdpUrl: string, timeoutMs: number) => Promise<Browser>;
+  /** Floor between two hung-tab remediations. Default 30 minutes. */
+  remediationIntervalMs?: number;
+  /** Bound on probing one tab during remediation. Default 5000. */
+  probeTimeoutMs?: number;
+  /** DevTools HTTP calls during remediation. Default global fetch. */
+  cdpFetch?: typeof fetch;
+  /** Injection point for tests. Default probeTarget (a websocket per tab). */
+  probe?: (wsUrl: string | undefined, timeoutMs: number) => Promise<ProbeResult>;
+  /**
+   * Told about every remediation (metrics, owner notification). Awaited, so
+   * it must not call back into this session.
+   */
+  onRemediation?: (report: RemediationReport) => void | Promise<void>;
 }
 
 export const DEFAULT_BASE_URL = "https://www.strava.com";
@@ -204,6 +228,8 @@ export class WebSession implements StravaWebSession {
   readonly #pageCloseTimeoutMs: number;
   readonly #formHydrationTimeoutMs: number;
   #browser: Browser | null = null;
+  #connecting: Promise<Browser> | null = null;
+  #lastRemediationAt: number | null = null;
   #queue: Promise<unknown> = Promise.resolve();
   #loginAttempted = false;
 
@@ -678,18 +704,110 @@ export class WebSession implements StravaWebSession {
     }
   }
 
-  async #connection(): Promise<Browser> {
-    if (this.#browser !== null && this.#browser.isConnected()) return this.#browser;
+  /**
+   * The CDP connection, shared by every operation. Concurrent callers (an
+   * operation that timed out while connecting, and the next one) wait for
+   * the same attempt, so remediation never overlaps anything.
+   */
+  #connection(): Promise<Browser> {
+    if (this.#browser !== null && this.#browser.isConnected())
+      return Promise.resolve(this.#browser);
+    this.#connecting ??= this.#establish().finally(() => {
+      this.#connecting = null;
+    });
+    return this.#connecting;
+  }
+
+  async #connect(): Promise<Browser> {
     const connect =
       this.#options.connect ??
       ((url: string, timeout: number) => chromium.connectOverCDP(url, { timeout }));
+    const browser = await connect(this.#options.cdpUrl, this.#navigationTimeoutMs);
+    this.#browser = browser;
+    return browser;
+  }
+
+  /**
+   * Connect; if that fails while the DevTools HTTP endpoint still answers
+   * (the browser is up but attaching hangs, typically on a wedged tab),
+   * remediate once (rate limited) and retry the connect once.
+   */
+  async #establish(): Promise<Browser> {
     try {
-      const browser = await connect(this.#options.cdpUrl, this.#navigationTimeoutMs);
-      this.#browser = browser;
-      return browser;
+      return await this.#connect();
     } catch (error) {
-      throw new BrowserUnavailableError("cannot reach the browser over CDP", { cause: error });
+      const unavailable = new BrowserUnavailableError("cannot reach the browser over CDP", {
+        cause: error,
+      });
+      const now = this.#clock.now();
+      const interval = this.#options.remediationIntervalMs ?? DEFAULT_REMEDIATION_INTERVAL_MS;
+      if (!remediationAllowed(this.#lastRemediationAt, now, interval)) throw unavailable;
+      const http = new CdpHttp({
+        cdpUrl: this.#options.cdpUrl,
+        ...(this.#options.cdpFetch === undefined ? {} : { fetch: this.#options.cdpFetch }),
+      });
+      if (!(await http.answers())) throw unavailable;
+      this.#lastRemediationAt = now;
+      this.#log?.warn(
+        { err: error },
+        "browser answers over HTTP but CDP attach failed; checking for hung tabs",
+      );
+      return this.#remediate(http, error);
     }
+  }
+
+  async #remediate(http: CdpHttp, connectError: unknown): Promise<Browser> {
+    let report: RemediationReport;
+    let browser: Browser | null = null;
+    let failure: unknown = connectError;
+    try {
+      const tabs = await remediateHungTabs({
+        http,
+        probeTimeoutMs: this.#options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
+        log: this.#log,
+        ...(this.#options.probe === undefined ? {} : { probe: this.#options.probe }),
+      });
+      try {
+        browser = await this.#connect();
+        report = { outcome: "recovered", ...tabs };
+      } catch (retryError) {
+        failure = retryError;
+        report = { outcome: "failed", ...tabs, error: "connect still fails after remediation" };
+      }
+    } catch (remediationError) {
+      failure = remediationError;
+      report = {
+        outcome: "failed",
+        probed: [],
+        openedBlank: false,
+        closed: [],
+        stillListed: [],
+        error: "remediation could not complete",
+      };
+    }
+    this.#log?.warn(
+      {
+        outcome: report.outcome,
+        closed: report.closed,
+        probed: report.probed,
+        openedBlank: report.openedBlank,
+        stillListed: report.stillListed,
+        ...(report.outcome === "failed" ? { err: failure } : {}),
+      },
+      report.outcome === "recovered"
+        ? "browser remediation recovered the CDP connection"
+        : "browser remediation failed; a manual browser restart is needed",
+    );
+    try {
+      await this.#options.onRemediation?.(report);
+    } catch (error) {
+      this.#log?.error({ err: error }, "remediation callback failed");
+    }
+    if (browser === null)
+      throw new BrowserUnavailableError("cannot reach the browser over CDP after remediation", {
+        cause: failure,
+      });
+    return browser;
   }
 
   async #navigate(page: Page, path: string): Promise<void> {

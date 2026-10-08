@@ -42,6 +42,7 @@ export class Metrics {
   readonly webLoginHealthy: Gauge;
   readonly backups: Counter<"result">;
   readonly originalExports: Counter<"result">;
+  readonly webRemediations: Counter<"result">;
 
   constructor(options: MetricsOptions) {
     const { sources } = options;
@@ -80,6 +81,12 @@ export class Metrics {
         this.set({ status: "unavailable" }, counts.unavailable);
         this.set({ status: "backing_off" }, counts.backingOff);
       },
+    });
+    this.webRemediations = new Counter({
+      name: "cameld_web_remediations_total",
+      help: "Hung browser tab remediations by result: recovered or failed",
+      labelNames: ["result"],
+      registers,
     });
     this.lastPoll = new Gauge({
       name: "cameld_last_successful_poll_timestamp_seconds",

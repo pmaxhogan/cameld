@@ -1,16 +1,73 @@
 import type { Logger } from "../logging.ts";
 import { ChallengeError, LoginRequiredError } from "../web/errors.ts";
+import type { RemediationReport } from "../web/cdp-remediation.ts";
 import type { StravaWebSession, WebHealth } from "../web/session.ts";
 import type { Metrics } from "./metrics.ts";
-import { type Notifier, notifySafely } from "./notifier.ts";
+import { type Notification, type Notifier, notifySafely } from "./notifier.ts";
 
 /**
  * Gatekeeper for every strava.com web action (ARCHITECTURE.md section 5,
  * "Captcha or verification challenge"). When the session is logged out or
  * challenged, all web actions pause until a health check sees a live session
  * again; API work (backups) is unaffected. The owner is notified once per
- * outage. Without a configured browser the gate is permanently closed.
+ * outage and per kind of outage: a login problem (log in through the VNC
+ * view) and an unreachable browser (restart the sidecar) need different
+ * actions, so a login outage that turns into a browser outage, or the other
+ * way round, notifies again. Without a configured browser the gate is
+ * permanently closed.
  */
+
+type OutageKind = "login" | "browser";
+
+function outageKind(reason: string): OutageKind {
+  return reason === "browser_unavailable" ? "browser" : "login";
+}
+
+function outageNotification(reason: string): Notification {
+  if (outageKind(reason) === "browser")
+    return {
+      kind: "browser_unavailable",
+      level: "critical",
+      title: "Strava browser is unreachable",
+      body: "Web actions are paused: cameld cannot attach to the browser sidecar. Restart the cameld-browser container.",
+    };
+  return {
+    kind: "login_unhealthy",
+    level: "warning",
+    title: "Strava web login needs attention",
+    body: `Web actions are paused (${reason}). Log in through the browser sidecar.`,
+  };
+}
+
+/** The owner notification for one hung-tab remediation (WebSession onRemediation). */
+export function remediationNotification(report: RemediationReport): Notification {
+  const closed = report.closed.length;
+  if (report.outcome === "recovered")
+    return {
+      kind: "browser_remediated",
+      level: "warning",
+      title: "Browser recovered from a hung tab",
+      body: `cameld closed ${closed} unresponsive tab${closed === 1 ? "" : "s"} in the browser sidecar and reconnected. Nothing else was touched.`,
+    };
+  return {
+    kind: "browser_restart_needed",
+    level: "critical",
+    title: "Browser sidecar needs a manual restart",
+    body: `cameld could not recover the browser over CDP (closed ${closed} unresponsive tab${closed === 1 ? "" : "s"}). Restart the cameld-browser container; web actions stay paused until then.`,
+  };
+}
+
+/** WebSession's onRemediation: count it and tell the owner. Never throws. */
+export function remediationReporter(deps: {
+  notifier: Notifier;
+  metrics?: Metrics;
+  log?: Logger;
+}): (report: RemediationReport) => Promise<void> {
+  return async (report) => {
+    deps.metrics?.webRemediations.inc({ result: report.outcome });
+    await notifySafely(deps.notifier, remediationNotification(report), deps.log);
+  };
+}
 
 export class WebPausedError extends Error {
   override readonly name = "WebPausedError";
@@ -32,6 +89,7 @@ export class WebGate {
   readonly #now: () => number;
   #healthy: boolean;
   #reason: string | null;
+  #notified: OutageKind | null = null;
 
   constructor(options: WebGateOptions) {
     this.#session = options.session;
@@ -58,24 +116,18 @@ export class WebGate {
     this.#healthy = false;
     this.#reason = reason;
     this.#metrics?.setWebLogin(false);
-    if (!wasHealthy) return;
-    this.#log?.warn({ reason }, "web session unhealthy; web actions paused");
-    await notifySafely(
-      this.#notifier,
-      {
-        kind: "login_unhealthy",
-        level: "warning",
-        title: "Strava web login needs attention",
-        body: `Web actions are paused (${reason}). Log in through the browser sidecar.`,
-      },
-      this.#log,
-    );
+    if (wasHealthy) this.#log?.warn({ reason }, "web session unhealthy; web actions paused");
+    const kind = outageKind(reason);
+    if (this.#notified === kind) return;
+    this.#notified = kind;
+    await notifySafely(this.#notifier, outageNotification(reason), this.#log);
   }
 
   #markHealthy(): void {
     if (!this.#healthy) this.#log?.info("web session healthy again; web actions resume");
     this.#healthy = true;
     this.#reason = null;
+    this.#notified = null;
     this.#metrics?.setWebLogin(true);
   }
 
