@@ -14,7 +14,7 @@ import { LogNotifier, notifySafely } from "./service/notifier.ts";
 import { MultiNotifier, PushNotifier, PushService } from "./service/push.ts";
 import { Poller } from "./service/poller.ts";
 import { HttpSnapshotter, UnavailableSnapshotter } from "./service/snapshotter.ts";
-import { WebGate } from "./service/web-gate.ts";
+import { remediationReporter, WebGate } from "./service/web-gate.ts";
 import { FreezeStore } from "./state/freeze.ts";
 import { MergeMachine } from "./state/machine.ts";
 import { originalCounts, parkedByReason } from "./state/repo.ts";
@@ -81,6 +81,7 @@ async function main(): Promise<void> {
           logger: log.child({ mod: "web" }),
           ...(relay === undefined ? {} : { relay }),
           ...(config.strava.webEmail === undefined ? {} : { email: config.strava.webEmail }),
+          onRemediation: remediationReporter({ notifier, metrics, log }),
         });
   const web = new WebGate({ session, notifier, log, metrics });
 

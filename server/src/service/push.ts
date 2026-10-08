@@ -197,7 +197,13 @@ export class PushService {
 /** Where a notification should take the owner when tapped. */
 export function notificationUrl(notification: Notification): string {
   if (notification.kind === "review") return "/#/review";
-  if (notification.kind === "login_unhealthy") return "/#/browser";
+  if (
+    notification.kind === "login_unhealthy" ||
+    notification.kind === "browser_unavailable" ||
+    notification.kind === "browser_remediated" ||
+    notification.kind === "browser_restart_needed"
+  )
+    return "/#/browser";
   if (notification.kind === "backfill_batch" || notification.kind === "trial_done") {
     return "/#/backfill";
   }

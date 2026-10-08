@@ -87,6 +87,14 @@ export interface FakeStrava {
   acceptCodes: boolean;
   /** Log a browser in: navigate a page to this URL. */
   sessionUrl: string;
+  /**
+   * A page whose renderer spins forever shortly after load, so the tab stops
+   * answering CDP (Page.enable, Runtime.evaluate) like the wedged tab left
+   * behind by a sidecar restart. Served on `localhost` rather than
+   * 127.0.0.1: a different site gets its own renderer process, so the spin
+   * never blocks the fake strava.com pages.
+   */
+  hangUrl: string;
   expireSessions(): void;
   close(): Promise<void>;
 }
@@ -267,6 +275,7 @@ export async function startFakeStrava(): Promise<FakeStrava> {
     mailbox: [],
     acceptCodes: true,
     sessionUrl: "",
+    hangUrl: "",
     expireSessions: () => sessions.clear(),
     close: () => app.close(),
   };
@@ -384,6 +393,14 @@ export async function startFakeStrava(): Promise<FakeStrava> {
       return reply.redirect("/login");
     },
   });
+
+  app.get("/__test/hang", (_request, reply) =>
+    reply
+      .type("text/html")
+      .send(
+        "<!doctype html><title>Synthetic hang</title><p>Spinning.</p><script>setTimeout(() => { for (;;) {} }, 300);</script>",
+      ),
+  );
 
   app.get("/dashboard", (request, reply) => {
     const session = guard(request, reply);
@@ -519,5 +536,6 @@ export async function startFakeStrava(): Promise<FakeStrava> {
   const port = typeof address === "object" && address !== null ? address.port : 0;
   fake.baseUrl = `http://127.0.0.1:${port}`;
   fake.sessionUrl = `${fake.baseUrl}/__test/session`;
+  fake.hangUrl = `http://localhost:${port}/__test/hang`;
   return fake;
 }

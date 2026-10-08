@@ -5,7 +5,9 @@ exertion, export original files, or attach photos. These go through the
 strava.com web session in the `cameld-browser` sidecar: a real headed Chrome
 with a persistent profile, driven over CDP (`connectOverCDP`, use
 `browser.contexts()[0]`). Always work in a NEW page and close only that page.
-Never close the browser, never touch other tabs, never log out.
+Never close the browser, never log out, and never touch other tabs, with one
+narrow exception: a tab that does not answer CDP at all may be closed by the
+hung-tab remediation below, after a blank tab has been opened.
 
 ## Login
 
@@ -101,6 +103,67 @@ cookies alive (an integration test checks this).
   retried. `login()` tries once; after a failure it refuses until a health
   check sees a live session again.
 
+### Hung tabs
+
+Observed after a sidecar restart: the one restored strava.com tab stopped
+answering CDP. `connectOverCDP` attaches to every page and waits for each to
+initialize (`Page.enable`, `Page.getFrameTree`, `Runtime.enable`), so that one
+tab made every connect time out after 30 s, while `GET /json/version` and
+`/json/list` still answered. The list held that `page` target and two
+`browser_ui` targets (`chrome://omnibox-popup.top-chrome/...`). Opening a
+blank tab (`PUT /json/new?about:blank`) and closing the hung one
+(`GET /json/close/<id>`) fixed it at once, with the profile's cookies intact.
+
+`cdp-remediation.ts` automates exactly that, from the session's connection
+step (so it runs inside the one-operation-at-a-time queue, and concurrent
+callers share one connection attempt):
+
+1. Trigger: `connectOverCDP` failed AND `GET /json/version` answers within
+   5 s. A browser that does not answer over HTTP is just unavailable.
+2. Rate limit: at most once per `remediationIntervalMs` (default 30 minutes).
+3. List targets (`/json/list`). Probe every candidate over its own
+   `webSocketDebuggerUrl` with `Runtime.evaluate("1")`, 5 s each, in
+   parallel. Candidates are `type: "page"` only, and never `chrome://`,
+   `chrome-untrusted://`, `devtools://` or `chrome-extension://` pages:
+   `browser_ui`, service workers and every other type are never probed or
+   touched.
+4. A tab is closed ONLY when its socket opened and the probe got no answer in
+   time. A tab that answered is never closed; one whose socket failed, never
+   opened or was dropped proves nothing and is left alone.
+5. If anything is to be closed, open `about:blank` FIRST, so the window never
+   loses its last tab and Chrome never exits. The blank tab is left open.
+6. Close the unresponsive tabs, wait (bounded, 5 s) for them to leave
+   `/json/list`, then retry `connectOverCDP` once.
+
+Every remediation logs at warn (probed tabs with origin and path only, which
+were closed and why), counts in `cameld_web_remediations_total{result}`, and
+notifies the owner: `browser_remediated` (warning) when the retry connected,
+`browser_restart_needed` (critical) when it did not. A remediation run by the
+keepalive's own health check lets that same check succeed, so the web gate and
+`cameld_web_login_healthy` recover at once instead of an hour later.
+Independently, the gate raises one `browser_unavailable` (critical)
+notification per outage while health checks keep failing with
+`browser_unavailable`, rather than a silent hourly failure.
+
+Escalation (restarting Chrome) is NOT automated. cameld has no Docker access;
+the only lever would be CDP `Browser.close`, which makes Chrome exit. Whether
+the sidecar then relaunches it depends on its base image, not on cameld:
+linuxserver/chrome on `baseimage-selkies` runs an `svc-watchdog` that
+relaunches the autostart command (`wrapped-chrome`, same `--user-data-dir`)
+only when `RESTART_APP=true`, and otherwise just sleeps; the older
+`baseimage-kasmvnc` has no watchdog at all. cameld cannot see which image or
+environment the sidecar runs, so it cannot prove a relaunch, and a Chrome
+that never comes back is worse than a hung tab (and may drop session-only
+cookies). It therefore never kills Chrome and asks the owner to restart the
+container. If a future version automates it, it must be opt-in and only for a
+selkies-based sidecar with `RESTART_APP=true`.
+
+The integration test (`web-hung-tab.integration.test.ts`, its own Chromium)
+opens a fake page that spins its renderer (`for (;;) {}`) shortly after load,
+on a different site so it gets its own renderer process, and checks that the
+gate's keepalive closes exactly that tab, keeps every other target, adds one
+blank tab, reconnects with the login intact and leaves the browser running.
+
 ### DeletionAuthorization
 
 `deleteActivity(id, auth)` requires a `DeletionAuthorization`
@@ -141,7 +204,7 @@ success. The state machine must ALSO confirm deletion through the API
 `server/test/fake-strava/` is a synthetic, Rails-like fake of these pages. It
 resets any field missing from a PATCH, carries a `data-method=delete` Log Out
 link on every page, and has modes for expiry, captcha, 403, 429, refused
-`request_otp`, slow pages and failed saves. Its visibility control is radios,
+`request_otp`, slow pages and failed saves, plus a `hangUrl` page that wedges its tab. Its visibility control is radios,
 like Strava's; `late_hydration` injects them by script `hydrateMs` (1500)
 after load and `never_hydrates` never does. The integration tests spawn a real
 Chromium with `--remote-debugging-port` and connect over CDP, like the
