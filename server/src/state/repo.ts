@@ -462,7 +462,15 @@ export type WriteKind =
   | "restore_update"
   | "restore_web";
 
-export type WriteStatus = "intent" | "done" | "rejected" | "failed" | "unknown" | "superseded";
+/**
+ * `sent` is a delete the web side confirmed while the API still listed the
+ * activity: Strava's API is eventually consistent after a web delete, so it
+ * waits (reconcile() and the delete step re-check it) for the API 404 within
+ * `timing.deleteConfirmWindowMs`. The column is free text (0003), so no
+ * migration was needed for it.
+ */
+export type WriteStatus =
+  "intent" | "sent" | "done" | "rejected" | "failed" | "unknown" | "superseded";
 
 export interface WriteRow {
   id: number;
@@ -527,7 +535,9 @@ export function finishWrite(
 
 export function openWrites(db: DatabaseSync): WriteRow[] {
   const rows = db
-    .prepare("SELECT * FROM strava_writes WHERE status IN ('intent', 'unknown') ORDER BY id")
+    .prepare(
+      "SELECT * FROM strava_writes WHERE status IN ('intent', 'unknown', 'sent') ORDER BY id",
+    )
     .all() as Row[];
   return rows.map(toWrite);
 }

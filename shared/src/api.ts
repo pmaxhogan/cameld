@@ -24,6 +24,8 @@ export interface ApiSettings {
     keepaliveIntervalMs: number;
     partnerWaitMs: number;
     gracePeriodMs: number;
+    /** How long a web-confirmed delete may wait for the API 404 before writes freeze. */
+    deleteConfirmWindowMs: number;
   };
   match: Omit<MatchSettings, "partnerWaitMs">;
   merge: MergeSettings;
