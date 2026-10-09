@@ -894,6 +894,7 @@ export class MergeMachine {
   async #restoreOrWait(group: GroupRow): Promise<Step> {
     // A delete still waiting for the API must settle before anything is restored.
     for (const id of this.#members(group)) {
+      if (this.#knownGone(id)) continue;
       const sent = this.#sentDelete(id);
       if (sent !== null && sent.status !== "failed") await this.#awaitSentDelete(group, sent);
     }
@@ -1241,7 +1242,7 @@ export class MergeMachine {
   // Deletion: the only place a DeletionAuthorization is minted.
 
   async #guardedDelete(group: GroupRow, id: number, reason: DeletionReason): Promise<void> {
-    if (requireActivity(this.#db, id).goneAt !== null) return;
+    if (this.#knownGone(id)) return;
     // A delete already sent is only ever confirmed, never sent again, and its
     // fresh pre-delete backup is not taken again (the activity may be gone).
     const sent = this.#sentDelete(id);
@@ -1339,11 +1340,13 @@ export class MergeMachine {
     evidence: Record<string, unknown>,
   ): Promise<boolean> {
     const id = write.targetId;
+    const webMessage = webError === null ? null : message(webError);
     let gone: boolean;
     try {
       gone = await this.#apiGone(id);
     } catch (error) {
-      finishWrite(this.#db, write.id, "unknown", { lookup: message(error) }, this.#now());
+      const result = { lookup: message(error), webError: webMessage };
+      finishWrite(this.#db, write.id, "unknown", result, this.#now());
       await this.#freeze.freeze(`group ${group.id}: delete of ${id} sent but unconfirmed`, {
         id,
         lookup: message(error),
@@ -1357,7 +1360,6 @@ export class MergeMachine {
       );
       throw new Wait("deletion_unconfirmed");
     }
-    const webMessage = webError === null ? null : message(webError);
     if (gone) {
       this.#recordGone(write, { webError: webMessage });
       return true;
@@ -1399,6 +1401,18 @@ export class MergeMachine {
 
   #deleteWrites(id: number): WriteRow[] {
     return writesFor(this.#db, { kind: "delete" }).filter((w) => w.targetId === id);
+  }
+
+  /**
+   * Whether `id` is already recorded gone. The poller or backfill may have
+   * seen the API 404 first (they set gone_at): a sent delete still waiting is
+   * then finished from that 404, without another lookup.
+   */
+  #knownGone(id: number): boolean {
+    if (requireActivity(this.#db, id).goneAt === null) return false;
+    const sent = this.#sentDelete(id);
+    if (sent !== null) this.#confirmLate(sent);
+    return true;
   }
 
   /** The first delete of `id` that was sent and is not confirmed yet, if any. */
@@ -1634,8 +1648,9 @@ export class MergeMachine {
       const flags: string[] = [];
       // A delete the API has not confirmed yet: check it first, before any write.
       for (const id of this.#members(group)) {
+        if (this.#knownGone(id)) continue;
         const sent = this.#sentDelete(id);
-        if (sent === null || requireActivity(this.#db, id).goneAt !== null) continue;
+        if (sent === null) continue;
         if (await this.#apiGone(id)) {
           this.#confirmLate(sent);
         } else if (sent.status !== "failed") {
@@ -1754,6 +1769,12 @@ export class MergeMachine {
       }
       // Still listed: the API may lag a web delete that was sent, so it is
       // never sent again. The delete step owns the confirmation window.
+      const { webError } = resultObject(write);
+      if (write.status === "unknown" && typeof webError === "string") {
+        // The web side reported an error: an ordinary failed delete, as before.
+        finishWrite(this.#db, write.id, "failed", { stillExists: true, webError }, now);
+        return;
+      }
       if (write.status !== "sent") {
         // An intent may not have been sent at all (via lookup); an unknown one was.
         const via = write.status === "intent" ? { via: "lookup" } : {};

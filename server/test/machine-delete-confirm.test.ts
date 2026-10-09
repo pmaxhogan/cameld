@@ -7,6 +7,7 @@ import {
   listGroups,
   patchGroup,
   requireGroup,
+  setActivityFields,
   writesFor,
 } from "../src/state/repo.ts";
 import { addOuting } from "./fixtures/synthetic-outings.ts";
@@ -252,6 +253,20 @@ describe("recovery of a delete frozen before the confirmation window existed", (
     expect(late?.evidence).toMatchObject({ id: outing.fitbit.id, writeId, confirmed: "api_404" });
   });
 
+  it("finishes the delete from a 404 the poller saw first", async () => {
+    const { outing, group, writeId } = await frozenAfterLegacyDelete((x) => x.clock.now());
+    setActivityFields(h.db, outing.fitbit.id, { gone_at: h.clock.now() });
+    await h.freeze.unfreeze("owner");
+    await h.machine.tick();
+    expect(requireGroup(h.db, group.id).status).toBe("done");
+    expect(requireGroup(h.db, group.id).deletedIds).toContain(outing.fitbit.id);
+    expect(writesFor(h.db, { kind: "delete" }).find((w) => w.id === writeId)).toMatchObject({
+      status: "done",
+      result: { confirmed: "api_404", late: true },
+    });
+    expect(deleteCalls(h)).toEqual([outing.app.id]);
+  });
+
   it("freezes again, sending nothing, when the API still lists it past the window", async () => {
     const { outing, group, fresh } = await frozenAfterLegacyDelete((x) => x.clock.now());
     h.world.apiLags = (id) => id === outing.fitbit.id;
@@ -354,6 +369,21 @@ describe("open delete intents after a restart, with a lagging API", () => {
     const [write] = writesFor(h.db, { kind: "delete" });
     expect(write).toMatchObject({ status: "sent", result: { stillExists: true, webError: null } });
     expect((write?.result as { via?: string }).via).toBeUndefined();
+  });
+
+  it("keeps an unknown delete that the web side reported as failed re-sendable", async () => {
+    h = await createHarness();
+    const outing = addOuting(h.world);
+    await h.poller.poll();
+    const group = listGroups(h.db)[0]!;
+    const id = beginWrite(h.db, { groupId: group.id, kind: "delete", targetId: outing.app.id }, 0);
+    const result = { lookup: "synthetic lost response", webError: "Error: synthetic odd page" };
+    finishWrite(h.db, id, "unknown", result, 0);
+    await h.machine.reconcile();
+    expect(writesFor(h.db, { kind: "delete" })[0]).toMatchObject({
+      status: "failed",
+      result: { stillExists: true, webError: "Error: synthetic odd page" },
+    });
   });
 
   it("re-checks an intent in the delete step when the reconcile lookup failed", async () => {
