@@ -102,6 +102,47 @@ upload rejected as a duplicate of an activity carrying the group's own
 `external_id` is the group's earlier upload, never a reason for Path B. The
 freeze and the owner's go-ahead are re-checked immediately before each delete.
 
+### Delete confirmation window
+
+An activity is recorded gone (`gone_at`, the group's `deletedIds`) ONLY after
+the API answers `GET /api/v3/activities/{id}` with 404. Web-side evidence
+alone never records it gone. Strava's API is eventually consistent after a web
+delete: live, it kept serving a web-deleted activity (by id and in the athlete
+list) for roughly 15 to 25 minutes. So:
+
+1. The delete is sent and the web side confirms it, but the API still lists
+   the activity: the `strava_writes` row becomes `sent` (result
+   `{stillExists: true, webError: null, snapshot, backupVerifiedAt, permit}`),
+   a `delete_sent` event is appended and the group waits
+   (`wait:deletion_confirming`) in its current status. Nothing is frozen and
+   no lock is held across ticks.
+2. Every tick, `reconcile()` re-checks `sent` rows (also while frozen: it is a
+   read), and the delete step re-checks the id before anything else. 404:
+   the row becomes `done` (`confirmed: "api_404"`, `late: true`, `delayMs`), a
+   `deleted` event is appended and the step carries on.
+3. Still listed after `timing.deleteConfirmWindowMs` (default 60 minutes),
+   measured from when the delete was sent: the row becomes `failed`
+   `{stillExists: true, webError: null}`, writes freeze ("delete of X sent but
+   not confirmed by the API within N minutes") and the owner is notified
+   (`deletion_unconfirmed`), once.
+4. A delete in any of those states (`sent`, an open intent, or that `failed`
+   shape) is never sent again, and its fresh pre-delete backup is not taken
+   again. A `failed` one is re-checked by the delete step after the owner
+   lifts the freeze: 404 records it gone (late) and the path continues;
+   still listed freezes again. This is also how a delete frozen by a release
+   without the window (same `failed` shape) recovers.
+5. An open intent the API still lists after a restart may never have been
+   sent: it waits like a `sent` row (`via: "lookup"`); if the window passes
+   it becomes an ordinary failed write and the step may send the delete.
+6. Path A's confirmation (`a_confirming`) waits inside the window when the
+   API lists an original whose delete it already confirmed. Path B never
+   restores while a member's delete is waiting; one that expired is flagged
+   in the restore outcome. An owner restore re-checks such members first and
+   refuses (409) while one is still inside the window.
+
+`cameld_delete_confirmation_delay_seconds` records the time from sending a
+delete to the API 404.
+
 ### Rules for both paths
 
 - **Deletion switch.** Any step that deletes requires the deletion switch to
@@ -151,7 +192,8 @@ freeze and the owner's go-ahead are re-checked immediately before each delete.
 10. Wait the grace period (24 hours by default, a setting).
 11. If the deletion switch is ON: re-verify the merge, take a fresh backup and
     snapshot, then delete both originals. Otherwise stop; originals stay hidden.
-12. Confirm both originals are gone and the merge is intact.
+12. Confirm both originals are gone (API 404, within the delete confirmation
+    window above) and the merge is intact.
 
 ### Path B: only when step 6 is rejected as a duplicate
 

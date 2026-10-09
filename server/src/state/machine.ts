@@ -89,6 +89,12 @@ import { matchSettingsOf, type SettingsStore } from "./settings.ts";
  * activity by external_id; a delete by GET -> 404) before anything is
  * repeated, so a crash never uploads or deletes twice.
  *
+ * Strava's API is eventually consistent after a web delete: it may keep
+ * listing the activity for many minutes. A delete the web side confirmed is
+ * journaled as `sent` and the group waits (`deletion_confirming`) for the API
+ * 404 within `timing.deleteConfirmWindowMs`; only then is the activity
+ * recorded gone. A sent delete is never sent again.
+ *
  * Writes are refused while frozen (checked right before each write), except
  * the restore writes of Path B, which run first and then freeze.
  *
@@ -227,6 +233,35 @@ export function isTransient(error: unknown): boolean {
 
 function is404(error: unknown): boolean {
   return error instanceof StravaApiError && error.status === 404;
+}
+
+/**
+ * A delete the web side reported done while the API still listed the
+ * activity: `sent` (waiting for the API 404), an open intent, or the expired
+ * shape `failed {stillExists: true, webError: null}` (also what releases
+ * before the confirmation window wrote). None of them may be sent again.
+ */
+function isSentDelete(write: WriteRow): boolean {
+  if (write.status === "sent" || write.status === "intent" || write.status === "unknown") {
+    return true;
+  }
+  const result = write.result as { stillExists?: unknown; webError?: unknown } | null;
+  return write.status === "failed" && result?.stillExists === true && result.webError === null;
+}
+
+/** The journal fields a delete confirmation needs. */
+interface SentWrite {
+  id: number;
+  groupId: string | null;
+  targetId: number;
+  createdAt: number;
+}
+
+function resultObject(write: WriteRow): Record<string, unknown> {
+  const result = write.result;
+  return typeof result === "object" && result !== null && !Array.isArray(result)
+    ? (result as Record<string, unknown>)
+    : {};
 }
 
 function message(error: unknown): string {
@@ -827,12 +862,14 @@ export class MergeMachine {
   async #stepConfirm(group: GroupRow): Promise<Step> {
     const gone: number[] = [];
     for (const id of this.#members(group)) {
-      try {
-        await this.#api.getActivity(id);
-      } catch (error) {
-        if (!is404(error)) throw error;
+      if (await this.#apiGone(id)) {
         gone.push(id);
         continue;
+      }
+      // The API may answer from a replica that has not seen the delete yet.
+      const done = this.#deleteWrites(id).find((w) => w.status === "done");
+      if (done !== undefined && this.#now() - done.createdAt < this.#confirmWindow()) {
+        throw new Wait("deletion_confirming");
       }
       throw new CheckFailedError("an original still exists after its delete", { id });
     }
@@ -854,9 +891,16 @@ export class MergeMachine {
     };
   }
 
-  #restoreOrWait(group: GroupRow): Step {
-    if (group.deletedIds.length === 0) throw new Wait("frozen");
-    return { to: "b_restore", event: "frozen_mid_path_b", evidence: { deleted: group.deletedIds } };
+  async #restoreOrWait(group: GroupRow): Promise<Step> {
+    // A delete still waiting for the API must settle before anything is restored.
+    for (const id of this.#members(group)) {
+      if (this.#knownGone(id)) continue;
+      const sent = this.#sentDelete(id);
+      if (sent !== null && sent.status !== "failed") await this.#awaitSentDelete(group, sent);
+    }
+    const { deletedIds } = requireGroup(this.#db, group.id);
+    if (deletedIds.length === 0) throw new Wait("frozen");
+    return { to: "b_restore", event: "frozen_mid_path_b", evidence: { deleted: deletedIds } };
   }
 
   async #stepRetry(group: GroupRow): Promise<Step> {
@@ -880,6 +924,12 @@ export class MergeMachine {
     const outcomes: { id: number; outcome: RestoreOutcome }[] = [];
     for (const id of group.deletedIds) {
       outcomes.push({ id, outcome: await this.restoreActivity(id, group.id) });
+    }
+    // Deleted on the web but never confirmed by the API: cameld cannot tell
+    // whether it still exists, so the owner checks it. Its backup is kept.
+    for (const id of this.#members(group)) {
+      if (group.deletedIds.includes(id) || this.#sentDelete(id) === null) continue;
+      outcomes.push({ id, outcome: await this.#flagRestore(id, "delete_sent_unconfirmed") });
     }
     const flagged = outcomes.some((o) => o.outcome.status === "flagged");
     await this.#freeze.freeze(
@@ -1192,7 +1242,15 @@ export class MergeMachine {
   // Deletion: the only place a DeletionAuthorization is minted.
 
   async #guardedDelete(group: GroupRow, id: number, reason: DeletionReason): Promise<void> {
-    if (requireActivity(this.#db, id).goneAt !== null) return;
+    if (this.#knownGone(id)) return;
+    // A delete already sent is only ever confirmed, never sent again, and its
+    // fresh pre-delete backup is not taken again (the activity may be gone).
+    const sent = this.#sentDelete(id);
+    if (sent !== null) {
+      // An expired one is re-checked only once the owner has lifted the freeze.
+      if (sent.status === "failed") this.#assertWritable();
+      if ((await this.#awaitSentDelete(group, sent)) === "gone") return;
+    }
     this.#assertWritable();
     const permit = this.#permit(group);
     if (permit === null) throw new Wait("deletion_switch_off");
@@ -1235,10 +1293,11 @@ export class MergeMachine {
     // Re-check the freeze and the owner's go-ahead right before the write.
     this.#assertWritable();
     if (this.#permit(group) === null) throw new Wait("deletion_switch_off");
+    const sentAt = this.#now();
     const writeId = beginWrite(
       this.#db,
       { groupId: group.id, kind: "delete", targetId: id },
-      this.#now(),
+      sentAt,
     );
     let webError: unknown = null;
     try {
@@ -1250,13 +1309,13 @@ export class MergeMachine {
       finishWrite(this.#db, writeId, "failed", { notSent: true }, this.#now());
       throw webError;
     }
-    const gone = await this.#confirmGone(group, writeId, id, webError);
+    const evidence = { snapshot, backupVerifiedAt: fresh.verifiedAt, permit };
+    const write = { id: writeId, groupId: group.id, targetId: id, createdAt: sentAt };
+    const gone = await this.#confirmGone(group, write, webError, evidence);
     if (gone) {
       appendEvent(this.#db, group.id, this.#now(), group.status, group.status, "deleted", {
         id,
-        snapshot,
-        backupVerifiedAt: fresh.verifiedAt,
-        permit,
+        ...evidence,
       });
       return;
     }
@@ -1264,26 +1323,30 @@ export class MergeMachine {
       throw webError;
     await this.#freeze.freeze(`group ${group.id}: delete of ${id} was not confirmed`, {
       id,
-      webError: webError === null ? null : message(webError),
+      webError: message(webError),
     });
     throw new Wait("deletion_failed");
   }
 
-  /** Confirm a delete through the API (404). Freezes and notifies when unknown. */
+  /**
+   * Confirm a delete through the API (404). The API lags web deletes, so an
+   * activity it still lists after a delete the web side confirmed is
+   * journaled `sent` and waited for. Freezes and notifies when unknown.
+   */
   async #confirmGone(
     group: GroupRow,
-    writeId: number,
-    id: number,
+    write: SentWrite,
     webError: unknown,
+    evidence: Record<string, unknown>,
   ): Promise<boolean> {
+    const id = write.targetId;
+    const webMessage = webError === null ? null : message(webError);
+    let gone: boolean;
     try {
-      await this.#api.getActivity(id);
+      gone = await this.#apiGone(id);
     } catch (error) {
-      if (is404(error)) {
-        this.#recordGone(group.id, writeId, id, webError);
-        return true;
-      }
-      finishWrite(this.#db, writeId, "unknown", { lookup: message(error) }, this.#now());
+      const result = { lookup: message(error), webError: webMessage };
+      finishWrite(this.#db, write.id, "unknown", result, this.#now());
       await this.#freeze.freeze(`group ${group.id}: delete of ${id} sent but unconfirmed`, {
         id,
         lookup: message(error),
@@ -1297,35 +1360,182 @@ export class MergeMachine {
       );
       throw new Wait("deletion_unconfirmed");
     }
-    finishWrite(
-      this.#db,
-      writeId,
-      "failed",
-      {
-        stillExists: true,
-        webError: webError === null ? null : message(webError),
-      },
-      this.#now(),
-    );
+    if (gone) {
+      this.#recordGone(write, { webError: webMessage });
+      return true;
+    }
+    if (webError === null) {
+      const now = this.#now();
+      const result = { stillExists: true, webError: null, ...evidence };
+      finishWrite(this.#db, write.id, "sent", result, now);
+      appendEvent(this.#db, group.id, now, group.status, group.status, "delete_sent", {
+        id,
+        writeId: write.id,
+        ...evidence,
+      });
+      this.#log?.warn(
+        { groupId: group.id, activityId: id, writeId: write.id },
+        "web delete done but the API still lists the activity; waiting for it to confirm",
+      );
+      throw new Wait("deletion_confirming");
+    }
+    const result = { stillExists: true, webError: webMessage };
+    finishWrite(this.#db, write.id, "failed", result, this.#now());
     return false;
   }
 
-  #recordGone(groupId: string | null, writeId: number, id: number, webError: unknown): void {
-    const now = this.#now();
-    finishWrite(
-      this.#db,
-      writeId,
-      "done",
-      { confirmed: "api_404", webError: webError === null ? null : message(webError) },
-      now,
+  /** True when the API answers 404 for the activity; other errors propagate. */
+  async #apiGone(id: number): Promise<boolean> {
+    try {
+      await this.#api.getActivity(id);
+      return false;
+    } catch (error) {
+      if (is404(error)) return true;
+      throw error;
+    }
+  }
+
+  #confirmWindow(): number {
+    return this.#settings.get().timing.deleteConfirmWindowMs;
+  }
+
+  #deleteWrites(id: number): WriteRow[] {
+    return writesFor(this.#db, { kind: "delete" }).filter((w) => w.targetId === id);
+  }
+
+  /**
+   * Whether `id` is already recorded gone. The poller or backfill may have
+   * seen the API 404 first (they set gone_at): a sent delete still waiting is
+   * then finished from that 404, without another lookup.
+   */
+  #knownGone(id: number): boolean {
+    if (requireActivity(this.#db, id).goneAt === null) return false;
+    const sent = this.#sentDelete(id);
+    if (sent !== null) this.#confirmLate(sent);
+    return true;
+  }
+
+  /** The first delete of `id` that was sent and is not confirmed yet, if any. */
+  #sentDelete(id: number): WriteRow | null {
+    const writes = this.#deleteWrites(id);
+    if (writes.some((w) => w.status === "done")) return null;
+    return writes.find(isSentDelete) ?? null;
+  }
+
+  /**
+   * Re-check a sent delete through the API. 404: recorded gone ("gone"), and
+   * the caller carries on. Still listed inside the window: wait. Still listed
+   * after it (measured from when the delete was sent): freeze and notify;
+   * except an intent found open after a restart (`via: "lookup"`), which may
+   * never have been sent: a sent delete would have reached the API by now,
+   * so it becomes an ordinary failed write and may be sent ("resend").
+   */
+  async #awaitSentDelete(group: GroupRow, write: WriteRow): Promise<"gone" | "resend"> {
+    const id = write.targetId as number;
+    if (await this.#apiGone(id)) {
+      this.#confirmLate(write);
+      return "gone";
+    }
+    const window = this.#confirmWindow();
+    const age = this.#now() - write.createdAt;
+    const before = {
+      ...resultObject(write),
+      ...(write.status === "intent" ? { via: "lookup" } : {}),
+    };
+    if (age < window) {
+      if (write.status !== "sent") {
+        const result = { ...before, stillExists: true, webError: null };
+        finishWrite(this.#db, write.id, "sent", result, this.#now());
+      }
+      throw new Wait("deletion_confirming");
+    }
+    if (before.via === "lookup") {
+      const result = { stillExists: true, via: "lookup", unconfirmedAfterMs: age };
+      finishWrite(this.#db, write.id, "failed", result, this.#now());
+      this.#log?.warn(
+        { groupId: group.id, activityId: id, writeId: write.id, ageMs: age },
+        "an interrupted delete intent was never confirmed; treating it as not sent",
+      );
+      return "resend";
+    }
+    return this.#expireSent(group, write, age, window);
+  }
+
+  async #expireSent(group: GroupRow, write: WriteRow, age: number, window: number): Promise<never> {
+    const id = write.targetId as number;
+    const minutes = Math.round(window / 60_000);
+    if (write.status !== "failed") {
+      const result = {
+        ...resultObject(write),
+        stillExists: true,
+        webError: null,
+        unconfirmedAfterMs: age,
+      };
+      finishWrite(this.#db, write.id, "failed", result, this.#now());
+    }
+    const evidence = { id, writeId: write.id, sentAt: write.createdAt, windowMs: window };
+    this.#log?.error(
+      { groupId: group.id, activityId: id, writeId: write.id, ageMs: age },
+      "a sent delete was not confirmed by the API within the window",
     );
+    if (!this.#freeze.isFrozen()) {
+      await this.#freeze.freeze(
+        `group ${group.id}: delete of ${id} sent but not confirmed by the API within ${minutes} minutes`,
+        evidence,
+      );
+    }
+    await this.#notify(
+      "deletion_unconfirmed",
+      "critical",
+      "A delete was not confirmed by the API",
+      `${group.id}: activity ${id} is still listed ${minutes} minutes after the website deleted it`,
+      group.id,
+    );
+    throw new Wait("deletion_unconfirmed");
+  }
+
+  /** A sent delete the API now answers 404 for: record it gone, marked late. */
+  #confirmLate(write: WriteRow): void {
+    const id = write.targetId as number;
+    const before = resultObject(write);
+    const delayMs = this.#recordGone(
+      { id: write.id, groupId: write.groupId, targetId: id, createdAt: write.createdAt },
+      { webError: null, late: true, firstCheck: { status: write.status, result: write.result } },
+    );
+    if (write.groupId === null) return;
+    const { status } = requireGroup(this.#db, write.groupId);
+    const sendEvidence = Object.fromEntries(
+      Object.entries(before).filter(([key]) => !["stillExists", "webError"].includes(key)),
+    );
+    appendEvent(this.#db, write.groupId, this.#now(), status, status, "deleted", {
+      id,
+      writeId: write.id,
+      confirmed: "api_404",
+      late: true,
+      delayMs,
+      ...sendEvidence,
+    });
+  }
+
+  /** Record an API-404-confirmed delete. Returns the delay since it was sent. */
+  #recordGone(write: SentWrite, details: Record<string, unknown>): number {
+    const now = this.#now();
+    const id = write.targetId;
+    const delayMs = Math.max(0, now - write.createdAt);
+    finishWrite(this.#db, write.id, "done", { confirmed: "api_404", delayMs, ...details }, now);
     setActivityFields(this.#db, id, { gone_at: now });
-    if (groupId !== null) {
-      const group = requireGroup(this.#db, groupId);
+    if (write.groupId !== null) {
+      const group = requireGroup(this.#db, write.groupId);
       if (!group.deletedIds.includes(id)) {
-        patchGroup(this.#db, groupId, { deletedIds: [...group.deletedIds, id] }, now);
+        patchGroup(this.#db, write.groupId, { deletedIds: [...group.deletedIds, id] }, now);
       }
     }
+    this.#metrics?.deleteConfirmDelay.observe(delayMs / 1000);
+    this.#log?.info(
+      { groupId: write.groupId, activityId: id, writeId: write.id, delayMs },
+      "delete confirmed by the API",
+    );
+    return delayMs;
   }
 
   // -------------------------------------------------------------------------
@@ -1436,9 +1646,25 @@ export class MergeMachine {
       const restored: GroupRestoreResult["restored"] = [];
       const unhidden: number[] = [];
       const flags: string[] = [];
+      // A delete the API has not confirmed yet: check it first, before any write.
+      for (const id of this.#members(group)) {
+        if (this.#knownGone(id)) continue;
+        const sent = this.#sentDelete(id);
+        if (sent === null) continue;
+        if (await this.#apiGone(id)) {
+          this.#confirmLate(sent);
+        } else if (sent.status !== "failed") {
+          throw new NotRestorableError(
+            `the delete of ${id} is waiting for Strava's API to confirm it; try again later`,
+          );
+        } else {
+          flags.push(`${String(id)}: deleted on the website but still listed by the API`);
+        }
+      }
+      const { deletedIds } = requireGroup(this.#db, groupId);
       for (const id of this.#members(group)) {
         const activity = requireActivity(this.#db, id);
-        if (group.deletedIds.includes(id) || activity.goneAt !== null) {
+        if (deletedIds.includes(id) || activity.goneAt !== null) {
           const outcome = await this.restoreActivity(id, group.id);
           restored.push(
             outcome.status === "restored"
@@ -1536,15 +1762,25 @@ export class MergeMachine {
       return;
     }
     if (write.kind === "delete") {
-      const id = write.targetId as number;
-      try {
-        await this.#api.getActivity(id);
-      } catch (error) {
-        if (!is404(error)) throw error;
-        this.#recordGone(write.groupId, write.id, id, null);
+      // Runs even while frozen: confirming a delete is a read.
+      if (await this.#apiGone(write.targetId as number)) {
+        this.#confirmLate(write);
         return;
       }
-      finishWrite(this.#db, write.id, "failed", { stillExists: true, via: "lookup" }, now);
+      // Still listed: the API may lag a web delete that was sent, so it is
+      // never sent again. The delete step owns the confirmation window.
+      const { webError } = resultObject(write);
+      if (write.status === "unknown" && typeof webError === "string") {
+        // The web side reported an error: an ordinary failed delete, as before.
+        finishWrite(this.#db, write.id, "failed", { stillExists: true, webError }, now);
+        return;
+      }
+      if (write.status !== "sent") {
+        // An intent may not have been sent at all (via lookup); an unknown one was.
+        const via = write.status === "intent" ? { via: "lookup" } : {};
+        const result = { ...resultObject(write), stillExists: true, webError: null, ...via };
+        finishWrite(this.#db, write.id, "sent", result, now);
+      }
       return;
     }
     if (write.kind === "photo") {

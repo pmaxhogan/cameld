@@ -39,6 +39,7 @@ export const EVENT_LABELS: Record<string, string> = {
   grace_elapsed: "Grace period over; deleting the originals",
   originals_deleted: "Originals deleted on Strava",
   deleted: "Original deleted on Strava",
+  delete_sent: "Delete sent; waiting for Strava's API to confirm it",
   deletion_refused: "A delete was refused by a safety check",
   confirmed: "Confirmed: originals gone and the merged activity intact",
   path_b_start: "Path B: deleting originals one side at a time so the merge can upload",
@@ -97,6 +98,7 @@ export const WAIT_LABELS: Record<string, string> = {
   deletion_refused: "a refused delete to be resolved",
   deletion_failed: "a failed delete to be retried",
   deletion_unconfirmed: "a delete to be confirmed",
+  deletion_confirming: "Strava's API to confirm a delete the website already made",
 };
 
 export const WRITE_KIND_LABELS: Record<string, string> = {

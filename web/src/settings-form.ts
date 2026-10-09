@@ -5,7 +5,8 @@ import type { ApiSettings } from "@cameld/shared";
  * ApiSettings, so the save patch can be built from "what changed" generically.
  */
 
-const HOUR_MS = 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
 
 export interface FieldDef {
   id: string;
@@ -31,6 +32,15 @@ export const FIELDS: readonly FieldDef[] = [
     scale: HOUR_MS,
     integer: true,
     help: "How long the originals stay hidden after a verified merge before they may be deleted.",
+  },
+  {
+    id: "deleteConfirmWindow",
+    label: "Wait for Strava's API to confirm a delete (minutes)",
+    testid: "setting-delete-confirm-minutes",
+    path: ["timing", "deleteConfirmWindowMs"],
+    scale: MINUTE_MS,
+    integer: true,
+    help: "Strava's API can keep listing an activity for a while after the website deleted it. Writes freeze if it is still listed after this long.",
   },
   {
     id: "partnerWait",
