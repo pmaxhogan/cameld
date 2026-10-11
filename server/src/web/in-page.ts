@@ -13,6 +13,7 @@
 interface MiniElement {
   getAttribute(name: string): string | null;
   querySelector(selector: string): MiniElement | null;
+  querySelectorAll(selector: string): Iterable<MiniElement>;
 }
 interface MiniForm extends MiniElement {
   action: string;
@@ -86,6 +87,12 @@ export interface FormSnapshot {
   entries: [string, string][];
   /** `meta[name=csrf-token]`, when the page has one. */
   csrfToken: string | null;
+  /**
+   * Names whose value comes from a fixed set: every control of that name is
+   * a select, a radio, a checkbox or a hidden input next to one of those.
+   * Names with a text input or textarea are never listed.
+   */
+  controlled: string[];
 }
 
 /**
@@ -107,7 +114,25 @@ export function readActivityForm(activityPath: string): FormSnapshot | null {
     if (typeof value === "string") entries.push([name, value]);
   }
   const meta = document.querySelector('meta[name="csrf-token"]');
-  return { entries, csrfToken: meta === null ? null : meta.getAttribute("content") };
+  const names = (selector: string): string[] => {
+    const found: string[] = [];
+    for (const element of (form as MiniForm).querySelectorAll(selector)) {
+      const name = element.getAttribute("name");
+      if (name !== null) found.push(name);
+    }
+    return found;
+  };
+  const free = names(
+    'textarea[name], input[name]:not([type="hidden"]):not([type="radio"]):not([type="checkbox"])',
+  );
+  const controlled = names(
+    'select[name], input[type="radio"][name], input[type="checkbox"][name]',
+  ).filter((name, index, all) => all.indexOf(name) === index && !free.includes(name));
+  return {
+    entries,
+    csrfToken: meta === null ? null : meta.getAttribute("content"),
+    controlled,
+  };
 }
 
 /**

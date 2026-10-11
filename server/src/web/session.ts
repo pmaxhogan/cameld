@@ -37,6 +37,7 @@ import {
 import {
   buildSubmission,
   changedFields,
+  describeChanges,
   type EditFormValues,
   FIELD,
   type FormEntries,
@@ -45,6 +46,7 @@ import {
   normalizeText,
   photoIds,
   readValues,
+  sameEntries,
   VISIBILITIES,
   type Visibility,
 } from "./forms.ts";
@@ -84,6 +86,8 @@ export interface EditForm {
   /** Every submittable entry, in browser order. */
   entries: FormEntries;
   values: EditFormValues;
+  /** Names of fixed-vocabulary controls (select, radio, checkbox); see in-page.ts. */
+  controlled: string[];
 }
 
 export type HealthReason =
@@ -177,6 +181,12 @@ export interface WebSessionOptions {
    * radios client-side after load) before WebNotReadyError. Default 15000.
    */
   formHydrationTimeoutMs?: number;
+  /**
+   * Gap between the two identical reads that make a hydrated form "stable"
+   * (Strava's React code keeps setting controls after the hydration markers
+   * appear). Default 250. Bounded by formHydrationTimeoutMs.
+   */
+  formStableIntervalMs?: number;
   /** Bound on closing a page, which can hang on a wedged page. Default 5000. */
   pageCloseTimeoutMs?: number;
   /** Injection point for tests. Default chromium.connectOverCDP. */
@@ -234,6 +244,7 @@ export class WebSession implements StravaWebSession {
   readonly #landingPath: string;
   readonly #pageCloseTimeoutMs: number;
   readonly #formHydrationTimeoutMs: number;
+  readonly #formStableIntervalMs: number;
   #browser: Browser | null = null;
   #connecting: Promise<Browser> | null = null;
   #lastRemediationAt: number | null = null;
@@ -252,6 +263,7 @@ export class WebSession implements StravaWebSession {
     this.#landingPath = options.landingPath ?? "/dashboard";
     this.#pageCloseTimeoutMs = options.pageCloseTimeoutMs ?? 5000;
     this.#formHydrationTimeoutMs = options.formHydrationTimeoutMs ?? 15_000;
+    this.#formStableIntervalMs = Math.max(1, options.formStableIntervalMs ?? 250);
   }
 
   // ---------------------------------------------------------------- health
@@ -463,7 +475,14 @@ export class WebSession implements StravaWebSession {
         if (normalizeText(lastValue(after.entries, name) ?? "") !== normalizeText(value))
           wrong.push(name);
       }
-      if (wrong.length > 0) throw new WebVerificationError(activityId, wrong);
+      if (wrong.length > 0) {
+        const controlled = [...before.controlled, ...after.controlled];
+        throw new WebVerificationError(
+          activityId,
+          wrong,
+          describeChanges(wrong, before.entries, after.entries, controlled),
+        );
+      }
       this.#log?.info(
         { activityId, operation, fields: changes.map(([name]) => name) },
         "activity edited",
@@ -475,8 +494,11 @@ export class WebSession implements StravaWebSession {
   /**
    * Load the edit page, wait until Strava's React code has hydrated the form
    * (token, a checked visibility radio, the private note field), then read
-   * it. Reading at load would miss the visibility radios, and POSTing that
-   * would reset the activity's visibility.
+   * it until two reads `formStableIntervalMs` apart agree. Reading at load
+   * would miss the visibility radios, and POSTing that would reset the
+   * activity's visibility; reading right at the markers can still catch a
+   * control (a select) on its placeholder value before React sets the real
+   * one, and every edit POSTs every entry back.
    */
   async #readForm(page: Page, activityId: number): Promise<EditForm> {
     const path = `/activities/${activityId}/edit`;
@@ -492,7 +514,22 @@ export class WebSession implements StravaWebSession {
       if (!(error instanceof playwrightErrors.TimeoutError)) throw error;
       hydrated = false;
     }
-    const snapshot = await page.evaluate(readActivityForm, activityPath);
+    let snapshot = await page.evaluate(readActivityForm, activityPath);
+    let stable = false;
+    let moving: string[] = [];
+    for (
+      let waited = 0;
+      hydrated && snapshot !== null && !stable && waited < this.#formHydrationTimeoutMs;
+      waited += this.#formStableIntervalMs
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, this.#formStableIntervalMs));
+      const next = await page.evaluate(readActivityForm, activityPath);
+      if (next !== null) {
+        stable = sameEntries(snapshot.entries, next.entries);
+        moving = changedFields(snapshot.entries, next.entries);
+      }
+      snapshot = next;
+    }
     if (snapshot === null) throw new WebUnexpectedResponseError(`${path} has no activity form`);
     const missing = missingRequiredFields(snapshot.entries);
     if (!hydrated || missing.length > 0)
@@ -501,6 +538,13 @@ export class WebSession implements StravaWebSession {
         missing,
         hydrated ? "incomplete" : `not hydrated after ${this.#formHydrationTimeoutMs} ms`,
       );
+    if (!stable)
+      throw new WebNotReadyError(
+        path,
+        moving,
+        `kept changing for ${this.#formHydrationTimeoutMs} ms`,
+        "changing",
+      );
     const authenticityToken = lastValue(snapshot.entries, "authenticity_token") as string;
     return {
       activityId,
@@ -508,6 +552,7 @@ export class WebSession implements StravaWebSession {
       authenticityToken,
       entries: snapshot.entries,
       values: readValues(snapshot.entries),
+      controlled: snapshot.controlled,
     };
   }
 

@@ -36,6 +36,7 @@ function toFake(a: WorldActivity): FakeActivity {
     preferPerceivedExertion: a.preferPerceivedExertion,
     hideFromHome: a.hideFromHome,
     commute: a.commute,
+    polylineStyle: "default",
     photos: [],
     original: {
       filename: a.original?.filename ?? "none.fit",

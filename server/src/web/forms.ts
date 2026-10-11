@@ -136,6 +136,51 @@ export function changedFields(before: FormEntries, after: FormEntries): string[]
   return differ;
 }
 
+/** True when two snapshots would submit exactly the same entries, in the same order. */
+export function sameEntries(a: FormEntries, b: FormEntries): boolean {
+  return (
+    a.length === b.length &&
+    a.every(([name, value], i) => {
+      const other = b[i] as [string, string];
+      return name === other[0] && value === other[1];
+    })
+  );
+}
+
+export const REDACTED = "<redacted>";
+const SHOWN_VALUE_LENGTH = 64;
+
+/** Hidden inputs known to hold a number, not text (a photo caption is text). */
+const HIDDEN_ENUM = /^photos\[[^\]]+\]\[(rank|media_type)\]$/;
+
+/** One field of a failed verification; null means the field was absent. */
+export interface FieldChange {
+  field: string;
+  before: string | null;
+  after: string | null;
+}
+
+/**
+ * Before and after values of `names`, for diagnosis. Values are shown (cut
+ * to 64 characters) only for fields in `controlled` (selects, radios,
+ * checkboxes: a fixed vocabulary) and known hidden enums. Everything else
+ * may be the owner's free text (name, description, private note, captions,
+ * any hidden field) and is `<redacted>`.
+ */
+export function describeChanges(
+  names: readonly string[],
+  before: FormEntries,
+  after: FormEntries,
+  controlled: readonly string[],
+): FieldChange[] {
+  return [...new Set(names)].map((field) => {
+    const shown = controlled.includes(field) || HIDDEN_ENUM.test(field);
+    const show = (value: string | null): string | null =>
+      value === null ? null : shown ? value.slice(0, SHOWN_VALUE_LENGTH) : REDACTED;
+    return { field, before: show(lastValue(before, field)), after: show(lastValue(after, field)) };
+  });
+}
+
 /** Distinct photo uuids present as `photos[<uuid>][...]` entries. */
 export function photoIds(entries: FormEntries): string[] {
   const ids = new Set<string>();

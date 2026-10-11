@@ -1,3 +1,5 @@
+import type { FieldChange } from "./forms.ts";
+
 /**
  * Typed failures of the strava.com web session. Callers branch on the class
  * (or on `code`), never on message text. Messages carry paths, statuses and
@@ -64,13 +66,20 @@ export class WebTimeoutError extends WebSessionError {
 
 /**
  * The edit form never became complete (Strava's React code had not hydrated
- * it), or a form about to be POSTed lacks a required field. Nothing was sent.
+ * it) or never stopped changing, or a form about to be POSTed lacks a
+ * required field. Nothing was sent. `fields` are the ones missing (or, with
+ * `problem` "changing", the ones that still moved).
  */
 export class WebNotReadyError extends WebSessionError {
   override readonly name = "WebNotReadyError";
   readonly fields: string[];
-  constructor(path: string, fields: string[], detail: string) {
-    super("not_ready", `${path} form is not ready (${detail}): missing ${fields.join(", ")}`);
+  constructor(
+    path: string,
+    fields: string[],
+    detail: string,
+    problem: "missing" | "changing" = "missing",
+  ) {
+    super("not_ready", `${path} form is not ready (${detail}): ${problem} ${fields.join(", ")}`);
     this.fields = fields;
   }
 }
@@ -114,16 +123,23 @@ export class WebNoFileError extends WebUnexpectedResponseError {
   }
 }
 
-/** A write was sent but re-reading the form did not show the expected state. */
+/**
+ * A write was sent but re-reading the form did not show the expected state.
+ * The message names the fields only. `changes` (logged with the error) adds
+ * the before and after values, already redacted for anything that may be
+ * free text (`describeChanges` in forms.ts).
+ */
 export class WebVerificationError extends WebSessionError {
   override readonly name = "WebVerificationError";
   readonly fields: string[];
-  constructor(activityId: number, fields: string[]) {
+  readonly changes: FieldChange[];
+  constructor(activityId: number, fields: string[], changes: FieldChange[] = []) {
     super(
       "verification_failed",
       `activity ${activityId}: re-read form disagrees on ${fields.join(", ")}`,
     );
     this.fields = fields;
+    this.changes = changes;
   }
 }
 
