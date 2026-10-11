@@ -40,6 +40,7 @@ import {
   describeChanges,
   type EditFormValues,
   FIELD,
+  type FieldChange,
   type FormEntries,
   lastValue,
   missingRequiredFields,
@@ -187,6 +188,14 @@ export interface WebSessionOptions {
    * appear). Default 250. Bounded by formHydrationTimeoutMs.
    */
   formStableIntervalMs?: number;
+  /**
+   * Waits before each further re-read when the form re-read after a save
+   * disagrees with what was posted (the first page loads after a save can
+   * render a stale value). One re-read per entry; verification passes as
+   * soon as one agrees and fails after the last. Default
+   * DEFAULT_VERIFY_SETTLE_DELAYS_MS (20 s in all); [] fails at once.
+   */
+  verifySettleDelaysMs?: readonly number[];
   /** Bound on closing a page, which can hang on a wedged page. Default 5000. */
   pageCloseTimeoutMs?: number;
   /** Injection point for tests. Default chromium.connectOverCDP. */
@@ -207,6 +216,7 @@ export interface WebSessionOptions {
 }
 
 export const DEFAULT_BASE_URL = "https://www.strava.com";
+export const DEFAULT_VERIFY_SETTLE_DELAYS_MS: readonly number[] = [1000, 2000, 4000, 6000, 7000];
 export const DEFAULT_ATHLETE_MENU_SELECTOR =
   '[data-log-category="user-menu"], .user-menu, #athlete-menu, [data-testid="user-menu"]';
 const CODE_SENDER = "strava.com";
@@ -245,6 +255,7 @@ export class WebSession implements StravaWebSession {
   readonly #pageCloseTimeoutMs: number;
   readonly #formHydrationTimeoutMs: number;
   readonly #formStableIntervalMs: number;
+  readonly #verifySettleDelaysMs: readonly number[];
   #browser: Browser | null = null;
   #connecting: Promise<Browser> | null = null;
   #lastRemediationAt: number | null = null;
@@ -264,6 +275,7 @@ export class WebSession implements StravaWebSession {
     this.#pageCloseTimeoutMs = options.pageCloseTimeoutMs ?? 5000;
     this.#formHydrationTimeoutMs = options.formHydrationTimeoutMs ?? 15_000;
     this.#formStableIntervalMs = Math.max(1, options.formStableIntervalMs ?? 250);
+    this.#verifySettleDelaysMs = options.verifySettleDelaysMs ?? DEFAULT_VERIFY_SETTLE_DELAYS_MS;
   }
 
   // ---------------------------------------------------------------- health
@@ -456,6 +468,13 @@ export class WebSession implements StravaWebSession {
    * Read the form, POST it back with `_method=patch`, the CSRF token and
    * EVERY existing entry except `changes`, then re-read and verify that the
    * changed fields hold the new values and nothing else moved.
+   *
+   * Live, the first page load after a save rendered a select the save had
+   * posted back unchanged as "default", and the true value again minutes
+   * later. So a re-read that disagrees is repeated (a fresh page load and
+   * stable read each time) after each of `verifySettleDelaysMs`; the first
+   * one that agrees on EVERY field passes, and the last one's disagreement
+   * is thrown. No field and no value is exempt.
    */
   async #update(
     activityId: number,
@@ -466,23 +485,40 @@ export class WebSession implements StravaWebSession {
     return this.#run(operation, this.#operationTimeoutMs, async (page) => {
       const before = await this.#readForm(page, activityId);
       await this.#submit(page, before, "patch", changes);
-      const after = await this.#readForm(page, activityId);
       const expected = new Map(changes);
-      const wrong = changedFields(before.entries, after.entries).filter(
-        (name) => !expected.has(name),
-      );
-      for (const [name, value] of changes) {
-        if (normalizeText(lastValue(after.entries, name) ?? "") !== normalizeText(value))
-          wrong.push(name);
-      }
-      if (wrong.length > 0) {
+      const disagreement = (after: EditForm): FieldChange[] => {
+        const wrong = changedFields(before.entries, after.entries).filter(
+          (name) => !expected.has(name),
+        );
+        for (const [name, value] of changes) {
+          if (normalizeText(lastValue(after.entries, name) ?? "") !== normalizeText(value))
+            wrong.push(name);
+        }
         const controlled = [...before.controlled, ...after.controlled];
+        return describeChanges(wrong, before.entries, after.entries, controlled);
+      };
+      let after = await this.#readForm(page, activityId);
+      let wrong = disagreement(after);
+      const first = wrong;
+      let rereads = 0;
+      for (const delay of this.#verifySettleDelaysMs) {
+        if (wrong.length === 0) break;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        after = await this.#readForm(page, activityId);
+        wrong = disagreement(after);
+        rereads += 1;
+      }
+      if (wrong.length > 0)
         throw new WebVerificationError(
           activityId,
+          wrong.map((change) => change.field),
           wrong,
-          describeChanges(wrong, before.entries, after.entries, controlled),
         );
-      }
+      if (rereads > 0)
+        this.#log?.warn(
+          { activityId, operation, rereads, fields: first.map((c) => c.field), changes: first },
+          "re-read form disagreed right after the save and agreed on a later read",
+        );
       this.#log?.info(
         { activityId, operation, fields: changes.map(([name]) => name) },
         "activity edited",

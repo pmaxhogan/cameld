@@ -68,7 +68,13 @@ export type FakeMode =
    */
   | "late_style"
   /** A hidden field of the form changes every few ms, forever. */
-  | "unstable_form";
+  | "unstable_form"
+  /**
+   * After a save, the next `staleLoads` loads of that edit page render the
+   * map style select as "default" (the stored value is untouched), like the
+   * live site does briefly after a write.
+   */
+  | "stale_after_save";
 
 export interface RecordedRequest {
   method: string;
@@ -98,6 +104,8 @@ export interface FakeStrava {
   hydrateMs: number;
   /** Delay before the late_style script sets the map style select. */
   styleMs: number;
+  /** stale_after_save: how many edit page loads after a save are stale. */
+  staleLoads: number;
   activities: Map<number, FakeActivity>;
   requests: RecordedRequest[];
   /** Login codes "emailed" by request_otp, newest last. */
@@ -310,6 +318,7 @@ export async function startFakeStrava(): Promise<FakeStrava> {
   const sessions = new Map<string, string>(); // session id -> csrf token
   const uploads = new Map<string, PendingUpload>();
   const uploaded = new Set<string>();
+  const stale = new Map<number, number>(); // activity id -> stale edit page loads left
   let pendingCode: string | null = null;
 
   const fake: FakeStrava = {
@@ -318,6 +327,7 @@ export async function startFakeStrava(): Promise<FakeStrava> {
     slowMs: 5000,
     hydrateMs: 1500,
     styleMs: 150,
+    staleLoads: 1,
     activities: new Map(syntheticActivities().map((a) => [a.id, a])),
     requests: [],
     mailbox: [],
@@ -479,13 +489,17 @@ export async function startFakeStrava(): Promise<FakeStrava> {
     const activity = activityOr404(request.params.id, reply);
     if (activity === null) return reply;
     if (fake.mode === "slow_edit") await new Promise((r) => setTimeout(r, fake.slowMs));
+    if (fake.mode !== "stale_after_save") stale.clear();
+    const staleLeft = stale.get(activity.id) ?? 0;
+    if (staleLeft > 0) stale.set(activity.id, staleLeft - 1);
+    const shown = staleLeft > 0 ? { ...activity, polylineStyle: "default" } : activity;
     const hydration: Hydration =
       fake.mode === "late_hydration" ? "late" : fake.mode === "never_hydrates" ? "never" : "server";
     return reply
       .type("text/html")
       .send(
         editPage(
-          activity,
+          shown,
           session.csrf,
           fake.mode !== "no_form",
           fake.mode !== "no_meta",
@@ -519,6 +533,7 @@ export async function startFakeStrava(): Promise<FakeStrava> {
     }
     if (method === "patch") {
       if (fake.mode !== "ignore_patch") applyPatch(activity, entries, uploaded);
+      if (fake.mode === "stale_after_save") stale.set(activity.id, fake.staleLoads);
       if (fake.mode === "patch_side_effect") activity.hideFromHome = !activity.hideFromHome;
       if (fake.mode === "hide_new_photos")
         activity.photos = activity.photos.filter((p) => !uploaded.has(p.uuid));

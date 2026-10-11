@@ -124,6 +124,7 @@ beforeEach(async () => {
   fake.uploadRefusal = null;
   fake.hydrateMs = 1500;
   fake.styleMs = 150;
+  fake.staleLoads = 1;
   fake.acceptCodes = true;
   fake.activities = new Map(syntheticActivities().map((a) => [a.id, a]));
   fake.mailbox.length = 0;
@@ -283,7 +284,7 @@ describe("edit form", () => {
   });
 
   it("fails verification when the save did not stick or moved another field", async () => {
-    const session = open();
+    const session = open({ verifySettleDelaysMs: [5] });
     fake.mode = "ignore_patch";
     const ignored = await session.setVisibility(RUN_ID, "only_me").catch((e: unknown) => e);
     expect(ignored).toBeInstanceOf(WebVerificationError);
@@ -294,7 +295,7 @@ describe("edit form", () => {
   });
 
   it("records before and after values of a failed verification, free text redacted", async () => {
-    const session = open();
+    const session = open({ verifySettleDelaysMs: [5] });
     // A radio that did not take the new value: both values are shown.
     fake.mode = "ignore_patch";
     const ignored = await session.setVisibility(RUN_ID, "only_me").catch((e: unknown) => e);
@@ -336,6 +337,83 @@ describe("edit form", () => {
     await expect(open({ formHydrationTimeoutMs: 500 }).getEditForm(RUN_ID)).rejects.toBeInstanceOf(
       WebUnexpectedResponseError,
     );
+  });
+});
+
+describe("verification after a save", () => {
+  const editLoads = () =>
+    fake.requests.filter((r) => r.method === "GET" && r.path === `/activities/${RIDE_ID}/edit`);
+  const posts = () => fake.requests.filter((r) => r.method === "POST");
+  const settled = () => logLines.filter((l) => l.includes("agreed on a later read"));
+
+  it("does not wait or re-read again when the first re-read agrees", async () => {
+    logLines.length = 0;
+    // A wait here would outlast the operation timeout.
+    const session = open({ verifySettleDelaysMs: [60_000, 60_000] });
+    expect((await session.setVisibility(RIDE_ID, "only_me")).visibility).toBe("only_me");
+    expect(editLoads()).toHaveLength(2);
+    expect(settled()).toEqual([]);
+  });
+
+  it("passes, and says so, when a stale re-read is followed by one that agrees", async () => {
+    fake.mode = "stale_after_save";
+    fake.staleLoads = 2;
+    logLines.length = 0;
+    const session = open({ verifySettleDelaysMs: [5, 5, 5, 5] });
+    expect((await session.setVisibility(RIDE_ID, "only_me")).visibility).toBe("only_me");
+    // One read before the save, two stale re-reads, one that agrees; one save.
+    expect(editLoads()).toHaveLength(4);
+    expect(posts()).toHaveLength(1);
+    expect(fake.activities.get(RIDE_ID)).toMatchObject({
+      visibility: "only_me",
+      polylineStyle: "pace",
+    });
+    expect(settled()).toHaveLength(1);
+    expect(JSON.parse(settled()[0]!)).toMatchObject({
+      level: 40,
+      activityId: RIDE_ID,
+      operation: "set_visibility",
+      rereads: 2,
+      fields: ["activity[selected_polyline_style]"],
+      changes: [{ field: "activity[selected_polyline_style]", before: "pace", after: "default" }],
+    });
+  });
+
+  it("still fails, with the last read's changes, when no re-read in the window agrees", async () => {
+    fake.mode = "stale_after_save";
+    fake.staleLoads = 1000;
+    logLines.length = 0;
+    const session = open({ verifySettleDelaysMs: [5, 5, 5] });
+    const error = await session.setVisibility(RIDE_ID, "only_me").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WebVerificationError);
+    expect((error as Error).message).toBe(
+      `activity ${RIDE_ID}: re-read form disagrees on activity[selected_polyline_style]`,
+    );
+    expect((error as WebVerificationError).fields).toEqual(["activity[selected_polyline_style]"]);
+    expect((error as WebVerificationError).changes).toEqual([
+      { field: "activity[selected_polyline_style]", before: "pace", after: "default" },
+    ]);
+    // One read before the save, then the first re-read and one per delay.
+    expect(editLoads()).toHaveLength(5);
+    expect(posts()).toHaveLength(1);
+    expect(settled()).toEqual([]);
+  });
+
+  it("holds a field the save was meant to change to the same rule", async () => {
+    // The save is ignored for good: the target field never agrees.
+    fake.mode = "ignore_patch";
+    const session = open({ verifySettleDelaysMs: [5, 5] });
+    const error = await session.setVisibility(RIDE_ID, "only_me").catch((e: unknown) => e);
+    expect((error as WebVerificationError).changes).toEqual([
+      { field: "activity[visibility]", before: "followers_only", after: "followers_only" },
+    ]);
+    expect(editLoads()).toHaveLength(4);
+    // With no delays configured it fails on the first re-read.
+    fake.requests.length = 0;
+    await expect(
+      open({ verifySettleDelaysMs: [] }).setVisibility(RIDE_ID, "only_me"),
+    ).rejects.toBeInstanceOf(WebVerificationError);
+    expect(editLoads()).toHaveLength(2);
   });
 });
 

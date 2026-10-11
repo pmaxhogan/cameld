@@ -117,6 +117,17 @@ cookies alive (an integration test checks this).
   `formHydrationTimeoutMs` throws `WebNotReadyError` ("kept changing",
   naming the fields that moved) and nothing is sent. A control React sets
   later than one quiet interval is not caught by this.
+- The first page load after a save can render a stale value: live, a save
+  that posted `activity[selected_polyline_style]` back unchanged was followed
+  by an edit page rendering it as `default`, and by the true value again a
+  few minutes later (two activities, with and without the stable read). So
+  when the re-read after a save disagrees, it is repeated, each time a fresh
+  page load and stable read, after each of `verifySettleDelaysMs` (default
+  1, 2, 4, 6 and 7 s: 20 s in all). The first re-read that agrees on EVERY
+  field passes and logs a warning (`rereads`, the field names and the
+  redacted values of the first disagreement); if none agrees the last one's
+  disagreement is thrown. No field and no value is exempt, the fields the
+  save meant to change included.
 - A failed verification (`WebVerificationError`) names the fields in its
   message and carries `changes`: per field the before and after values, cut
   to 64 characters, for fixed-vocabulary controls only (selects, radios,
@@ -256,6 +267,8 @@ link on every page, and has modes for expiry, captcha, 403, 429, refused
 like Strava's; `late_hydration` injects them by script `hydrateMs` (1500)
 after load and `never_hydrates` never does; `late_style` sets the map style
 select by script `styleMs` (150) after the markers are already there, and
-`unstable_form` keeps changing a hidden field. The integration tests spawn a real
+`unstable_form` keeps changing a hidden field; `stale_after_save` renders
+the map style select as `default` for the next `staleLoads` loads after a
+save. The integration tests spawn a real
 Chromium with `--remote-debugging-port` and connect over CDP, like the
 sidecar. CI installs it with `npx playwright install --with-deps chromium`.
