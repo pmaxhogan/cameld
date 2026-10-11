@@ -75,9 +75,13 @@ export class Poller {
   }
 
   async poll(): Promise<PollResult> {
-    if (this.#running) return { skipped: true, listed: 0, backedUp: 0, groups: 0, error: null };
+    if (this.#running) {
+      this.#log?.debug({ reason: "previous_poll_running" }, "poll skipped");
+      return { skipped: true, listed: 0, backedUp: 0, groups: 0, error: null };
+    }
     this.#running = true;
     const { db, api, backup, machine, clock } = this.#o;
+    const startedAt = Date.now();
     let listed = 0;
     let backedUp = 0;
     let groups = 0;
@@ -97,6 +101,7 @@ export class Poller {
         listed += batch.length;
         if (batch.length < this.#pageSize) break;
       }
+      this.#log?.debug({ after, listed }, "recent activities listed");
       // New activities get a full backup; known ones only what is still missing.
       const incomplete = db
         .prepare(
@@ -109,10 +114,15 @@ export class Poller {
         .all(now) as { id: number }[];
       const listedIds = new Set(ids);
       let retries = 0;
+      let deferred = 0;
+      let gone = 0;
       for (const { id } of incomplete) {
         const isListed = listedIds.has(id);
         if (!isListed) {
-          if (retries >= this.#retryLimit || this.#readsLeftToday() < this.#readReserve) continue;
+          if (retries >= this.#retryLimit || this.#readsLeftToday() < this.#readReserve) {
+            deferred += 1;
+            continue;
+          }
           retries += 1;
         }
         try {
@@ -122,6 +132,8 @@ export class Poller {
           if (error instanceof StravaApiError && error.status === 404) {
             // Deleted on Strava outside cameld: its backup (if any) stays.
             setActivityFields(db, id, { gone_at: clock.now() });
+            gone += 1;
+            this.#log?.info({ activityId: id }, "activity is gone on strava; its backup stays");
             continue;
           }
           this.#o.metrics?.backups.inc({ result: "error" });
@@ -133,9 +145,25 @@ export class Poller {
       machine.markSingles();
       await machine.tick();
       this.#o.metrics?.setLastPoll(clock.now());
+      this.#log?.info(
+        {
+          listed,
+          incomplete: incomplete.length,
+          backedUp,
+          retries,
+          deferred,
+          gone,
+          groups,
+          ms: Date.now() - startedAt,
+        },
+        "poll finished",
+      );
       return { skipped: false, listed, backedUp, groups, error: null };
     } catch (error) {
-      this.#log?.error({ err: error }, "poll failed");
+      this.#log?.error(
+        { err: error, listed, backedUp, groups, ms: Date.now() - startedAt },
+        "poll failed",
+      );
       return {
         skipped: false,
         listed,

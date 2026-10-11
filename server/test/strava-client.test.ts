@@ -1,3 +1,4 @@
+import { Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { createLogger } from "../src/logging.ts";
 import {
@@ -22,6 +23,16 @@ interface Recorded {
 type Handler = (req: Recorded, n: number) => Response | Promise<Response>;
 
 function setup(handler: Handler, opts: { retries?: number } = {}) {
+  const logged: string[] = [];
+  const logger = createLogger(
+    { logLevel: "debug" },
+    new Writable({
+      write(chunk: Buffer, _encoding, done) {
+        logged.push(chunk.toString());
+        done();
+      },
+    }),
+  );
   const clock = fakeClock("2030-01-01T10:00:00Z");
   const limiter = new RateLimiter({ clock, safetyMargin: 0 });
   const requests: Recorded[] = [];
@@ -41,10 +52,48 @@ function setup(handler: Handler, opts: { retries?: number } = {}) {
     fetch: fetchFn,
     baseUrl: "https://strava.example.invalid/api/v3",
     clock,
+    logger,
     ...(opts.retries === undefined ? {} : { maxRateLimitRetries: opts.retries }),
   });
-  return { client, limiter, clock, requests };
+  return { client, limiter, clock, requests, logged };
 }
+
+describe("request logging", () => {
+  it("logs method, path, status and rate usage, never the token, the query or the body", async () => {
+    const { client, logged } = setup((req) =>
+      req.url.pathname.endsWith("/streams")
+        ? new Response("synthetic refusal text", { status: 500 })
+        : Response.json({ id: 7, name: "Synthetic Name" }),
+    );
+    await client.getActivity(7);
+    await expect(client.getStreams(7)).rejects.toBeInstanceOf(StravaApiError);
+    const lines = logged.map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(lines[0]).toMatchObject({
+      mod: "strava-api",
+      msg: "strava api request",
+      method: "GET",
+      path: "/activities/7",
+      status: 200,
+      attempt: 0,
+    });
+    expect(lines[0]?.usage).toMatchObject({ read: { day: expect.anything() } });
+    expect(lines[1]).toMatchObject({
+      msg: "strava api request refused",
+      path: "/activities/7/streams",
+      status: 500,
+    });
+    const text = logged.join("");
+    for (const leak of [
+      "tok-abc",
+      "Bearer",
+      "include_all_efforts",
+      "key_by_type",
+      "Synthetic Name",
+    ])
+      expect(text).not.toContain(leak);
+    expect(text).not.toContain("synthetic refusal text");
+  });
+});
 
 describe("parseDuplicateOf and classifyUpload", () => {
   it("parses duplicate errors", () => {

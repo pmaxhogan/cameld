@@ -511,7 +511,13 @@ export class MergeMachine {
       );
     });
     this.#log?.info(
-      { groupId: group.id, from: group.status, to: step.to, event: step.event },
+      {
+        groupId: group.id,
+        from: group.status,
+        to: step.to,
+        event: step.event,
+        path: step.patch?.path ?? group.path,
+      },
       "transition",
     );
     const outcome = OUTCOMES[step.to];
@@ -568,7 +574,14 @@ export class MergeMachine {
   async #onError(group: GroupRow, error: unknown): Promise<void> {
     if (error instanceof Wait) {
       const marker = `wait:${error.reason}`;
-      if (group.lastError !== marker) this.#note(group, marker, null);
+      const waiting = { groupId: group.id, status: group.status, reason: error.reason };
+      // The first tick of a wait at info, every later tick of the same wait at debug.
+      if (group.lastError !== marker) {
+        this.#note(group, marker, null);
+        this.#log?.info(waiting, "group waits");
+      } else {
+        this.#log?.debug(waiting, "group still waits");
+      }
       return;
     }
     if (error instanceof Park) {
@@ -580,6 +593,11 @@ export class MergeMachine {
       return;
     }
     if (error instanceof CheckFailedError || error instanceof MergeCheckError) {
+      // Class and message only: the evidence can hold samples and stays in the event.
+      this.#log?.error(
+        { groupId: group.id, status: group.status, errorClass: error.name, reason: error.message },
+        "check failed; freezing writes",
+      );
       await this.#freeze.freeze(`group ${group.id}: ${error.message}`, error.evidence);
       await this.#transition(group, {
         to: "failed",
@@ -589,6 +607,10 @@ export class MergeMachine {
       return;
     }
     if (error instanceof BackupIntegrityError) {
+      this.#log?.error(
+        { groupId: group.id, status: group.status, errorClass: error.name, err: error },
+        "backup integrity error; freezing writes",
+      );
       await this.#freeze.freeze(`group ${group.id}: ${error.message}`, null);
       this.#note(group, `error:${message(error)}`, null);
       return;
@@ -596,11 +618,22 @@ export class MergeMachine {
     if (isTransient(error)) {
       const marker = `transient:${message(error)}`;
       if (group.lastError !== marker) this.#note(group, marker, null);
-      this.#log?.warn({ err: error, groupId: group.id }, "transient error; retrying next tick");
+      this.#log?.warn(
+        { err: error, groupId: group.id, status: group.status, errorClass: (error as Error).name },
+        "transient error; retrying next tick",
+      );
       return;
     }
     // Anything unexpected during a live merge is a failure: freeze, keep the state.
-    this.#log?.error({ err: error, groupId: group.id }, "unexpected error in a merge group");
+    this.#log?.error(
+      {
+        err: error,
+        groupId: group.id,
+        status: group.status,
+        errorClass: error instanceof Error ? error.name : typeof error,
+      },
+      "unexpected error in a merge group; freezing writes",
+    );
     this.#note(group, `error:${message(error)}`, null);
     await this.#freeze.freeze(`group ${group.id}: unexpected ${message(error)}`, null);
   }
@@ -857,7 +890,10 @@ export class MergeMachine {
       for (const id of this.#members(group)) {
         await this.#webWrite(group, "hide", id, (s) => s.setVisibility(id, "only_me"));
         hidden.push(id);
+        this.#log?.info({ groupId: group.id, activityId: id }, "original hidden");
       }
+    } else {
+      this.#log?.info({ groupId: group.id, reason: "hide_switch_off" }, "originals not hidden");
     }
     return {
       to: "hidden",
@@ -956,6 +992,10 @@ export class MergeMachine {
 
   async #stepRestore(group: GroupRow): Promise<Step> {
     const outcomes: { id: number; outcome: RestoreOutcome }[] = [];
+    this.#log?.warn(
+      { groupId: group.id, status: group.status, deletedIds: group.deletedIds },
+      "restoring the deleted originals",
+    );
     for (const id of group.deletedIds) {
       outcomes.push({ id, outcome: await this.restoreActivity(id, group.id) });
     }
@@ -1122,12 +1162,19 @@ export class MergeMachine {
       { groupId: group.id, kind, targetId: target },
       this.#now(),
     );
+    const context = { groupId: group.id, kind, targetId: target, writeId };
+    this.#log?.debug(context, "strava write started");
     try {
       const result = await write();
       finishWrite(this.#db, writeId, "done", null, this.#now());
+      this.#log?.debug(context, "strava write done");
       return result;
     } catch (error) {
       finishWrite(this.#db, writeId, "failed", { error: message(error) }, this.#now());
+      this.#log?.warn(
+        { ...context, errorClass: (error as Error).name, err: error },
+        "strava write failed",
+      );
       throw error;
     }
   }
@@ -1225,9 +1272,24 @@ export class MergeMachine {
           finishWrite(this.#db, writeId, "done", result, this.#now());
           attached += 1;
           if (!result.verified) flagged = true;
+          this.#log?.info(
+            { groupId: group.id, activityId: merged, from: id, writeId, verified: result.verified },
+            "photo re-attached",
+          );
         } catch (error) {
           finishWrite(this.#db, writeId, "failed", { error: message(error) }, this.#now());
           flagged = true;
+          this.#log?.warn(
+            {
+              groupId: group.id,
+              activityId: merged,
+              from: id,
+              writeId,
+              errorClass: (error as Error).name,
+              err: error,
+            },
+            "photo could not be re-attached; it stays in the backup",
+          );
         }
       }
     }
@@ -1310,13 +1372,26 @@ export class MergeMachine {
   }
 
   async #guardedDelete(group: GroupRow, id: number, reason: DeletionReason): Promise<void> {
-    if (this.#knownGone(id)) return;
+    const context = { groupId: group.id, activityId: id };
+    if (this.#knownGone(id)) {
+      this.#log?.debug(context, "delete: already recorded gone");
+      return;
+    }
     // A delete already sent is only ever confirmed, never sent again, and its
     // fresh pre-delete backup is not taken again (the activity may be gone).
     const sent = this.#sentDelete(id);
     if (sent !== null) {
       // An expired one is re-checked only once the owner has lifted the freeze.
       if (sent.status === "failed") this.#assertWritable();
+      this.#log?.debug(
+        {
+          ...context,
+          writeId: sent.id,
+          writeStatus: sent.status,
+          ageMs: this.#now() - sent.createdAt,
+        },
+        "delete: already sent; re-checking the API",
+      );
       if ((await this.#awaitSentDelete(group, sent)) === "gone") return;
     }
     this.#assertWritable();
@@ -1326,6 +1401,7 @@ export class MergeMachine {
     // pre-delete backup, snapshot or authorization: they would be redone, and
     // one more snapshot kept, on every tick until the session is healthy.
     if (!this.#web.available()) throw new Wait("web_paused");
+    this.#log?.info({ ...context, permit, reason }, "delete: permitted; taking the fresh backup");
     if (permit === "trial" && !requireGroup(this.#db, group.id).trial) {
       patchGroup(this.#db, group.id, { trial: true }, this.#now());
     }
@@ -1337,9 +1413,17 @@ export class MergeMachine {
         failures: fresh.failures,
       });
     }
+    this.#log?.debug(
+      { ...context, verifiedAt: fresh.verifiedAt, written: fresh.written },
+      "delete: fresh backup verified",
+    );
     const original = await this.#backup.readOriginal(id);
     if (original === null) throw new Park("original_missing", null);
     const snapshot = await this.#snapshotter.snapshot(`pre-delete-${id}`);
+    this.#log?.debug(
+      { ...context, snapshot, originalBytes: original.bytes.length },
+      "delete: original read back and snapshot taken",
+    );
     let auth: DeletionAuthorization;
     try {
       auth = DeletionAuthorization.mint(
@@ -1360,8 +1444,10 @@ export class MergeMachine {
         id,
         problem: error.message,
       });
+      this.#log?.warn({ ...context, problem: error.message }, "delete: authorization refused");
       throw new Wait("deletion_refused");
     }
+    this.#log?.debug({ ...context, reason: auth.reason }, "delete: authorization minted");
     // Re-check the freeze and the owner's go-ahead right before the write.
     this.#assertWritable();
     if (this.#permit(group) === null) throw new Wait("deletion_switch_off");
@@ -1377,6 +1463,15 @@ export class MergeMachine {
     } catch (error) {
       webError = error;
     }
+    this.#log?.info(
+      {
+        ...context,
+        writeId,
+        ms: this.#now() - sentAt,
+        webError: webError === null ? null : (webError as Error).name,
+      },
+      "delete: web delete answered",
+    );
     if (webError instanceof WebPausedError) {
       finishWrite(this.#db, writeId, "failed", { notSent: true }, this.#now());
       throw webError;
@@ -1432,6 +1527,16 @@ export class MergeMachine {
       );
       throw new Wait("deletion_unconfirmed");
     }
+    this.#log?.debug(
+      {
+        groupId: group.id,
+        activityId: id,
+        writeId: write.id,
+        gone,
+        ms: this.#now() - write.createdAt,
+      },
+      "delete: API asked whether the activity is gone",
+    );
     if (gone) {
       this.#recordGone(write, { webError: webMessage });
       return true;

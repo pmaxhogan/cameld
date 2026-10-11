@@ -410,6 +410,16 @@ daily batches inside the rate limits.
   result (`cameld_web_remediations_total`).
   Alerts: failed merge, frozen writes, login expired, polling stalled, backup
   write failure.
+- **Diagnostic logging.** The logs alone should say what happened. `info`
+  carries transitions, waits (first tick), operation outcomes and delete
+  steps; `warn` retries and recovered oddities; `error` failures; `debug`
+  the per-request detail (every API request, page load, in-page request,
+  form read and backup). `LOG_LEVEL` defaults to `info`, so `debug` lines
+  need `LOG_LEVEL=debug`. Logs carry ids, counts, sizes, durations, status
+  codes, field NAMES and fixed-vocabulary values only: never credentials,
+  cookies, tokens, login codes, email addresses, a URL's query string (a
+  presigned upload URL is logged as origin and path), free text (names,
+  descriptions, notes, captions), coordinates or streams.
 - **Configuration.** `loadConfig(process.env)` is the only environment reader.
   Variables are listed in `.env.example`; real values live only on the host.
 

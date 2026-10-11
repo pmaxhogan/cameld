@@ -324,6 +324,7 @@ export class BackupService {
   /** Back up one activity. See the module comment. */
   async backupActivity(activityId: number, options: BackupOptions = {}): Promise<BackupOutcome> {
     const fresh = options.fresh ?? false;
+    const startedAt = this.#now();
     const read = (): void => options.gate?.beforeRead();
     let written = 0;
     const note = (isNew: boolean): void => {
@@ -347,6 +348,7 @@ export class BackupService {
       } catch (error) {
         // Manual entries have no streams; record that rather than retrying forever.
         if (!(error instanceof StravaApiError && error.status === 404)) throw error;
+        this.#log?.debug({ activityId }, "activity has no streams; recorded as empty");
         streams = {};
       }
       note(await this.#store(activityId, "streams", `${dir}/streams.json`, json(streams)));
@@ -404,6 +406,18 @@ export class BackupService {
     this.#metrics?.backups.inc({ result: check.ok ? "ok" : "verify_failed" });
     if (!check.ok)
       this.#log?.error({ activityId, failures: check.failures }, "backup verify failed");
+    this.#log?.debug(
+      {
+        activityId,
+        fresh,
+        written,
+        originalStatus: activity.originalStatus,
+        webFormSaved: activity.webFormSaved,
+        verified: check.ok,
+        ms: verifiedAt - startedAt,
+      },
+      "activity backed up",
+    );
     return {
       activityId,
       written,
@@ -425,6 +439,7 @@ export class BackupService {
     try {
       const { bytes, contentType } = await this.#fetchPhoto(url);
       const ext = contentType.includes("png") ? "png" : "jpg";
+      this.#log?.debug({ activityId, size: bytes.length, contentType }, "photo downloaded");
       return await this.#store(activityId, "photo", `${dir}/photos/${id}.${ext}`, bytes);
     } catch (error) {
       // The photo list (with its URL) is stored; a later backup retries the file.
@@ -446,10 +461,20 @@ export class BackupService {
   /** An export may run now: web up, backoff over, hourly cap not reached. */
   #exportDue(nextAttemptAt: number | null): boolean {
     const now = this.#now();
-    if (!this.#web.available() || (nextAttemptAt !== null && nextAttemptAt > now)) return false;
+    if (!this.#web.available() || (nextAttemptAt !== null && nextAttemptAt > now)) {
+      this.#log?.debug(
+        { reason: this.#web.available() ? "backoff" : "web_paused" },
+        "original export not due",
+      );
+      return false;
+    }
     this.#exports = this.#exports.filter((at) => at > now - HOUR_MS);
     if (this.#exports.length < this.#exportsPerHour) return true;
     this.#metrics?.originalExports.inc({ result: "capped" });
+    this.#log?.debug(
+      { reason: "hourly_cap", cap: this.#exportsPerHour },
+      "original export not due",
+    );
     return false;
   }
 
@@ -469,6 +494,10 @@ export class BackupService {
         original_evidence: null,
       });
       this.#metrics?.originalExports.inc({ result: "present" });
+      this.#log?.info(
+        { activityId, size: file.bytes.length, format: dataTypeOf(filename), isNew },
+        "original file exported",
+      );
       return isNew;
     } catch (error) {
       if (error instanceof WebNotFoundError) {
@@ -524,6 +553,7 @@ export class BackupService {
         form.values,
       );
       setActivityFields(this.#db, activityId, { web_form_saved: 1 });
+      this.#log?.debug({ activityId, isNew }, "web form backed up");
       return isNew;
     } catch (error) {
       this.#log?.warn({ err: error, activityId }, "web form backup deferred");

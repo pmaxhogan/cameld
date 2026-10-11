@@ -71,6 +71,8 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     const response = await fetchFn(`${baseUrl}${path}`, {
       headers: { authorization: `Bearer ${options.token}` },
     });
+    // The path without its query; the answer (a login code) is never logged.
+    log?.debug({ path: path.split("?")[0], status: response.status }, "relay request");
     if (response.status === 204) return null;
     if (response.status === 401) throw new RelayAuthError("relay rejected the token");
     if (!response.ok)
@@ -82,28 +84,32 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     async waitForCode({ sender, since, timeoutMs }) {
       const query = new URLSearchParams({ sender, since: String(since) });
       const deadline = clock.now() + timeoutMs;
-      for (;;) {
+      log?.info({ sender, timeoutMs }, "waiting for a login code from the relay");
+      for (let polls = 1; ; polls += 1) {
         try {
           const found = await get<RelayCode>(`/codes/next?${query.toString()}`);
           if (found !== null) {
-            log?.info({ sender, waitedMs: clock.now() - since }, "relay code received");
+            log?.info({ sender, polls, waitedMs: clock.now() - since }, "relay code received");
             return found;
           }
         } catch (error) {
           if (error instanceof RelayAuthError) throw error;
           // Transient (network, 5xx): keep polling until the deadline.
-          log?.warn({ err: error }, "relay poll failed");
+          log?.warn({ err: error, polls }, "relay poll failed");
         }
         const remaining = deadline - clock.now();
         if (remaining <= 0) {
+          log?.warn({ sender, polls, timeoutMs }, "no login code arrived through the relay");
           throw new RelayTimeoutError(`no ${sender} code arrived within ${timeoutMs} ms`);
         }
         await clock.sleep(Math.min(interval, remaining));
       }
     },
 
-    getForwardingConfirmation() {
-      return get<ForwardingConfirmation>("/forwarding-confirmation");
+    async getForwardingConfirmation() {
+      const found = await get<ForwardingConfirmation>("/forwarding-confirmation");
+      log?.info({ found: found !== null }, "forwarding confirmation checked");
+      return found;
     },
   };
 }

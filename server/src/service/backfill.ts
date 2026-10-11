@@ -150,10 +150,15 @@ export class Backfill {
       error: null,
     };
     if (mode === "off") return result;
-    if (settings.paused) return { ...result, stopped: "paused" };
-    if (this.#running) return { ...result, stopped: "running" };
+    if (settings.paused || this.#running) {
+      const stopped = settings.paused ? "paused" : "running";
+      this.#log?.debug({ mode, reason: stopped }, "backfill batch not started");
+      return { ...result, stopped };
+    }
     this.#running = true;
     const { db, api, backup, budget, clock } = this.#o;
+    const startedAt = Date.now();
+    this.#log?.info({ mode, ...this.progress() }, "backfill batch started");
     try {
       for (;;) {
         const progress = this.progress();
@@ -168,6 +173,10 @@ export class Backfill {
           per_page: settings.pageSize,
         });
         const fresh = page.filter((a) => Date.parse(a.start_date) < cursor);
+        this.#log?.debug(
+          { cursorMs: cursor, listed: page.length, fresh: fresh.length },
+          "backfill page listed",
+        );
         if (fresh.length === 0) {
           this.#save(cursor, true, 0);
           result.stopped = "done";
@@ -183,6 +192,7 @@ export class Backfill {
           } catch (error) {
             if (error instanceof StravaApiError && error.status === 404) {
               setActivityFields(db, activity.id, { gone_at: clock.now() });
+              this.#log?.info({ activityId: activity.id }, "activity is gone on strava");
             } else {
               throw error;
             }
@@ -217,7 +227,7 @@ export class Backfill {
       this.#running = false;
     }
     if (mode === "dry_run") await this.writeReport();
-    this.#log?.info({ ...result }, "backfill batch finished");
+    this.#log?.info({ ...result, ms: Date.now() - startedAt }, "backfill batch finished");
     this.#last = { ...result, finishedAt: clock.now() };
     return result;
   }

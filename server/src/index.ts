@@ -120,6 +120,7 @@ async function main(): Promise<void> {
         : new HttpSnapshotter({
             url: config.snapshotHelperUrl,
             token: config.snapshotHelperToken,
+            log,
           });
     machine = new MergeMachine({
       db,
