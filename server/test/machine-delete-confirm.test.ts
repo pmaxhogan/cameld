@@ -11,7 +11,7 @@ import {
   writesFor,
 } from "../src/state/repo.ts";
 import { addOuting } from "./fixtures/synthetic-outings.ts";
-import { createHarness, type Harness } from "./machine-harness.ts";
+import { createHarness, type Harness, uploadCount } from "./machine-harness.ts";
 
 /**
  * Strava's API is eventually consistent after a web delete: it kept serving
@@ -63,7 +63,10 @@ describe("path B: the API lags a web delete", () => {
       lastError: "wait:deletion_confirming",
     });
     expect(h.freeze.isFrozen()).toBe(false);
-    expect(group.deletedIds).toEqual([]);
+    // The phone copy's delete went out in the same tick and is already confirmed.
+    expect(deleteCalls(h)).toEqual([outing.fitbit.id, outing.app.id]);
+    expect(group.deletedIds).toEqual([outing.app.id]);
+    expect(uploadCount(h, group.externalId)).toBe(1);
     expect(h.machine.activity(outing.fitbit.id)?.goneAt).toBeNull();
     expect(writesFor(h.db, { kind: "delete" })[0]).toMatchObject({
       status: "sent",
@@ -99,7 +102,8 @@ describe("path B: the API lags a web delete", () => {
     });
     const deleted = groupEvents(h.db, group.id).filter((e) => e.event === "deleted");
     expect(deleted).toHaveLength(2);
-    expect(deleted[0]?.evidence).toMatchObject({
+    expect(uploadCount(h, group.externalId)).toBe(2);
+    expect(deleted[1]?.evidence).toMatchObject({
       id: outing.fitbit.id,
       late: true,
       permit: "on",
@@ -124,15 +128,18 @@ describe("path B: the API lags a web delete", () => {
       status: "b_delete_fitbit",
       lastError: "wait:deletion_confirming",
     });
+    // The phone copy is recorded gone, but nothing is restored while the other waits.
+    expect(h.world.live().some((a) => a.externalId === outing.app.externalId)).toBe(false);
     lagging = false;
     h.clock.t += 10 * MINUTE;
     await h.machine.tick();
-    // Confirmed gone, then restored because writes are frozen mid path B.
+    // Confirmed gone, then both restored because writes are frozen mid path B.
     const group = listGroups(h.db)[0]!;
-    expect(group.deletedIds).toEqual([outing.fitbit.id]);
+    expect(group.deletedIds).toEqual([outing.app.id, outing.fitbit.id]);
     expect(group.status).toBe("failed");
     expect(h.world.live().some((a) => a.externalId === outing.fitbit.externalId)).toBe(true);
-    expect(deleteCalls(h)).toEqual([outing.fitbit.id]);
+    expect(h.world.live().some((a) => a.externalId === outing.app.externalId)).toBe(true);
+    expect(deleteCalls(h)).toEqual([outing.fitbit.id, outing.app.id]);
   });
 
   it("freezes once when the window runs out while frozen, and flags the restore", async () => {
@@ -148,8 +155,18 @@ describe("path B: the API lags a web delete", () => {
     expect(writesFor(h.db, { kind: "delete" })[0]?.status).toBe("failed");
     await h.machine.tick();
     expect(h.notifier.kinds().filter((k) => k === "deletion_unconfirmed")).toHaveLength(1);
-    expect(listGroups(h.db)[0]?.lastError).toBe("wait:frozen");
-    expect(deleteCalls(h)).toEqual([outing.fitbit.id]);
+    // The phone copy (recorded gone) is restored; the unconfirmed wrist copy is flagged.
+    const group = listGroups(h.db)[0]!;
+    expect(group.status).toBe("restore_flagged");
+    expect(h.world.live().some((a) => a.externalId === outing.app.externalId)).toBe(true);
+    const restored = groupEvents(h.db, group.id).find((e) => e.event === "restored");
+    expect(restored?.evidence).toMatchObject({
+      outcomes: [
+        { id: outing.app.id, outcome: { status: "restored" } },
+        { id: outing.fitbit.id, outcome: { status: "flagged", reason: "delete_sent_unconfirmed" } },
+      ],
+    });
+    expect(deleteCalls(h)).toEqual([outing.fitbit.id, outing.app.id]);
   });
 
   it("flags an unconfirmed member when path B restores the others", async () => {
@@ -163,7 +180,7 @@ describe("path B: the API lags a web delete", () => {
     h.world.apiLags = (id) => id === outing.app.id;
     await h.poller.poll();
     let group = listGroups(h.db)[0]!;
-    expect(group).toMatchObject({ status: "b_delete_app", deletedIds: [outing.fitbit.id] });
+    expect(group).toMatchObject({ status: "b_delete_fitbit", deletedIds: [outing.fitbit.id] });
     await h.freeze.freeze("synthetic failure elsewhere", null);
     await h.machine.tick();
     expect(listGroups(h.db)[0]?.lastError).toBe("wait:deletion_confirming");
@@ -292,7 +309,8 @@ describe("recovery of a delete frozen before the confirmation window existed", (
     expect(h.freeze.isFrozen()).toBe(false);
     expect(requireGroup(h.db, group.id).lastError).toBe("wait:deletion_confirming");
     expect(writesFor(h.db, { kind: "delete" })[0]?.status).toBe("sent");
-    expect(deleteCalls(h)).toEqual([]);
+    // The sent delete is only re-checked; the other member's delete goes out meanwhile.
+    expect(deleteCalls(h)).toEqual([outing.app.id]);
   });
 });
 
@@ -337,8 +355,11 @@ describe("path A and restore with a lagging API", () => {
     );
     lagging = false;
     const result = await h.machine.restoreGroup(group.id, "synthetic");
-    expect(result.restored).toMatchObject([{ id: outing.fitbit.id, outcome: "restored" }]);
-    expect(requireGroup(h.db, group.id).deletedIds).toEqual([outing.fitbit.id]);
+    expect(result.restored).toMatchObject([
+      { id: outing.app.id, outcome: "restored" },
+      { id: outing.fitbit.id, outcome: "restored" },
+    ]);
+    expect(requireGroup(h.db, group.id).deletedIds).toEqual([outing.app.id, outing.fitbit.id]);
   });
 
   it("flags an owner restore of a member the API never confirmed gone", async () => {
@@ -350,7 +371,7 @@ describe("path A and restore with a lagging API", () => {
     await h.machine.tick();
     expect(h.freeze.isFrozen()).toBe(true);
     const result = await h.machine.restoreGroup(listGroups(h.db)[0]!.id, "synthetic");
-    expect(result.restored).toEqual([]);
+    expect(result.restored).toMatchObject([{ id: outing.app.id, outcome: "restored" }]);
     expect(result.flags).toEqual([
       `${String(outing.fitbit.id)}: deleted on the website but still listed by the API`,
     ]);
@@ -415,6 +436,6 @@ describe("open delete intents after a restart, with a lagging API", () => {
       result: { via: "lookup" },
     });
     expect(requireGroup(h.db, group.id).lastError).toBe("wait:deletion_confirming");
-    expect(deleteCalls(h)).toEqual([]);
+    expect(deleteCalls(h)).toEqual([outing.app.id]);
   });
 });

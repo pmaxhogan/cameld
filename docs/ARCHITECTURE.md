@@ -136,9 +136,23 @@ list) for roughly 15 to 25 minutes. So:
    it becomes an ordinary failed write and the step may send the delete.
 6. Path A's confirmation (`a_confirming`) waits inside the window when the
    API lists an original whose delete it already confirmed. Path B never
-   restores while a member's delete is waiting; one that expired is flagged
+   restores while any member's delete is waiting (either side may have one,
+   and all of them are re-checked every tick); one that expired is flagged
    in the restore outcome. An owner restore re-checks such members first and
    refuses (409) while one is still inside the window.
+7. A step that deletes several activities (Path B's delete step, Path A's
+   `a_deleting`) sends EVERY member's delete first and only then waits, so
+   the lags overlap: one pair costs one API lag, not one per member. Members
+   whose delete is already sent or recorded gone are handled first (they
+   only read). The loop goes on to the next member in exactly one case: the
+   current member's delete is sent and merely waits for the API 404
+   (`wait:deletion_confirming`). Everything else stops it at once, before
+   another delete is sent: writes frozen, the owner's go-ahead missing or
+   withdrawn, a refused authorization, a delete whose outcome is unknown or
+   that expired (both freeze), a paused, logged-out or challenged web
+   session, a failed check, a park, and any transient or unexpected error.
+   Each delete keeps its own freeze and go-ahead re-check, fresh verified
+   backup, snapshot and single-use authorization.
 
 `cameld_delete_confirmation_delay_seconds` records the time from sending a
 delete to the API 404.
@@ -191,7 +205,8 @@ delete to the API 404.
 9. Hide both originals.
 10. Wait the grace period (24 hours by default, a setting).
 11. If the deletion switch is ON: re-verify the merge, take a fresh backup and
-    snapshot, then delete both originals. Otherwise stop; originals stay hidden.
+    snapshot, then delete both originals (both deletes are sent before either
+    API confirmation is waited for). Otherwise stop; originals stay hidden.
 12. Confirm both originals are gone (API 404, within the delete confirmation
     window above) and the merge is intact.
 
@@ -199,13 +214,49 @@ delete to the API 404.
 
 6b. Deletion switch OFF, or an original file missing: PARK the pair and stop.
 7b. Fresh backup, read-back, snapshot.
-8b. Delete the wrist original only and retry the upload. If it is still
-    rejected, delete the phone original and retry.
-9b. If the upload still fails, re-upload the deleted originals from their
-    original files, restore their metadata, then freeze and notify. If that
-    restore is itself rejected as a duplicate, keep it in the backup, flag it,
-    and notify.
+8b. Delete BOTH originals (every member of both sides) in one step: all
+    deletes are sent first, then all API confirmations are waited for
+    together (see "Delete confirmation window", item 7). Only when every
+    member is recorded gone is the merge uploaded, once.
+9b. If that upload fails for any reason (still a duplicate, or an error),
+    re-upload the deleted originals from their original files, restore their
+    metadata, then freeze and notify. If a restore is itself rejected as a
+    duplicate, keep it in the backup, flag it, and notify. The same restore
+    runs when writes freeze mid Path B, once every sent delete has settled:
+    members recorded gone are restored, a member whose delete was sent but
+    never confirmed is flagged.
 10b. Apply metadata, photos and the private note. Run the post-upload check.
+11b. Only if an original is NOT recorded gone at this point (possible for a
+    pair in flight from the serial flow below, whose first retry Strava
+    accepted): delete it with the usual guards and confirm it through the
+    API before the pair is done. No hide and no grace period: the owner's
+    Path B go-ahead already covered both deletes. Without the go-ahead the
+    pair waits (`awaiting_deletion`) and is not done.
+
+Path B statuses: `b_rejected` (go-ahead and original-file checks) ->
+`b_delete_fitbit` (delete every member; the name is kept from the serial
+flow so no stored status had to be migrated) -> `b_retry_2` (the single
+upload) -> `uploaded` -> `metadata_applied` -> `done`, or `b_retry_2` ->
+`b_restore` -> `failed` / `restore_flagged`. Step 11b reuses Path A's tail:
+`metadata_applied` -> `a_deleting` (or `awaiting_deletion` -> `a_deleting`
+once the go-ahead is given) -> `a_confirming` -> `done`.
+
+Why both at once (this replaced a serial flow: delete the wrist original,
+retry, and only if still rejected delete the phone original and retry
+again): every delete waits roughly 15 to 25 minutes for the API, so the
+serial flow cost two lags in a row (40 to 50 minutes per pair); in practice
+the first retry was always rejected as a duplicate of the phone copy, so
+the wait bought nothing; and when Strava did accept the first retry, the
+pair was marked done with the phone original left next to the merge. Now a
+pair costs one lag (roughly 15 to 25 minutes) and one upload.
+
+Pairs in flight from the serial flow keep working, and a delete they sent
+is only ever confirmed, never sent again: `b_delete_fitbit` deletes
+whatever is not yet sent or gone and goes to `b_retry_2`; `b_retry_1`
+still uploads (accepted: step 10b then 11b; duplicate: `b_delete_app`;
+error: restore); `b_delete_app` is the same delete-every-member step as
+`b_delete_fitbit`; `b_retry_2` and `b_restore` are unchanged. Neither
+`b_retry_1` nor `b_delete_app` is entered by a pair that starts Path B now.
 
 ## 6. Deletion switch and rollout
 

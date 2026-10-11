@@ -198,8 +198,11 @@ for roughly 15 to 25 minutes before answering 404. One immediate API check
 therefore cannot confirm a web delete. A delete the web side confirmed waits
 for the API 404 for up to `timing.deleteConfirmWindowMs` (default 60 minutes;
 "Wait for Strava's API to confirm a delete" in the settings) and is never
-sent again meanwhile; only past the window do writes freeze. See
-ARCHITECTURE.md section 5, "Delete confirmation window".
+sent again meanwhile; only past the window do writes freeze. Because of
+that lag, a step that deletes several activities (both originals of a pair)
+sends every delete, one web operation after another, before it waits for
+any API confirmation, so the lags overlap. See ARCHITECTURE.md section 5,
+"Delete confirmation window".
 
 ### Unverified until the first live session
 

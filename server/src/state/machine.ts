@@ -93,7 +93,14 @@ import { matchSettingsOf, type SettingsStore } from "./settings.ts";
  * listing the activity for many minutes. A delete the web side confirmed is
  * journaled as `sent` and the group waits (`deletion_confirming`) for the API
  * 404 within `timing.deleteConfirmWindowMs`; only then is the activity
- * recorded gone. A sent delete is never sent again.
+ * recorded gone. A sent delete is never sent again. A step that deletes
+ * several activities sends every delete first and only then waits, so the
+ * API lags overlap (`#deleteAll`).
+ *
+ * Path B deletes every member in one step (`b_delete_fitbit`, the name kept
+ * from the serial flow), then uploads once (`b_retry_2`). `b_retry_1` and
+ * `b_delete_app` are only reached by groups that were in flight when the
+ * serial flow was replaced.
  *
  * Writes are refused while frozen (checked right before each write), except
  * the restore writes of Path B, which run first and then freeze.
@@ -671,10 +678,16 @@ export class MergeMachine {
         };
       case "metadata_applied": {
         const evidence = await this.#verifyMerged(group);
+        if (group.path !== "B") return { to: "verified", event: "post_upload_check", evidence };
+        // An accepted upload with an original still on Strava (an in-flight
+        // retry 1): the pair is not done until that original is deleted too.
+        const remaining = this.#members(group).filter((id) => !this.#knownGone(id));
+        if (remaining.length === 0) return { to: "done", event: "post_upload_check", evidence };
+        const permit = this.#permit(group);
         return {
-          to: group.path === "B" ? "done" : "verified",
-          event: "post_upload_check",
-          evidence,
+          to: permit === null ? "awaiting_deletion" : "a_deleting",
+          event: permit === null ? "originals_remaining_deletion_off" : "originals_remaining",
+          evidence: { remaining, permit, check: evidence },
         };
       }
       case "verified":
@@ -684,8 +697,11 @@ export class MergeMachine {
         return this.#stepGrace(group);
       case "a_deleting": {
         const evidence = await this.#verifyMerged(group);
-        for (const id of this.#members(group))
-          await this.#guardedDelete(group, id, "path_a_grace_elapsed");
+        await this.#deleteAll(
+          group,
+          this.#members(group),
+          group.path === "B" ? "path_b_duplicate_rejected" : "path_a_grace_elapsed",
+        );
         return { to: "a_confirming", event: "originals_deleted", evidence };
       }
       case "a_confirming":
@@ -695,10 +711,12 @@ export class MergeMachine {
       case "b_delete_fitbit":
       case "b_delete_app": {
         if (this.#freeze.isFrozen()) return this.#restoreOrWait(group);
-        const ids = group.status === "b_delete_fitbit" ? group.fitbitIds : group.appIds;
-        for (const id of ids) await this.#guardedDelete(group, id, "path_b_duplicate_rejected");
-        const to = group.status === "b_delete_fitbit" ? "b_retry_1" : "b_retry_2";
-        return { to, event: "side_deleted", evidence: { ids } };
+        // Both statuses delete EVERY member, then upload once. b_delete_app is
+        // only reached by a group in flight from the serial flow; members it
+        // already deleted (or sent a delete for) are confirmed, never re-sent.
+        const ids = [...group.fitbitIds, ...group.appIds];
+        await this.#deleteAll(group, ids, "path_b_duplicate_rejected");
+        return { to: "b_retry_2", event: "originals_deleted", evidence: { ids } };
       }
       case "b_retry_1":
       case "b_retry_2":
@@ -850,6 +868,12 @@ export class MergeMachine {
   }
 
   #stepGrace(group: GroupRow): Step {
+    if (group.path === "B") {
+      // An accepted Path B upload with an original left: never hidden, no
+      // grace period (the owner's Path B go-ahead covered both deletes).
+      if (this.#permit(group) === null) throw new Wait("deletion_switch_off");
+      return { to: "a_deleting", event: "deletion_permitted" };
+    }
     const grace = this.#settings.get().timing.gracePeriodMs;
     if (this.#now() < (group.hiddenAt as number) + grace) throw new Wait("grace_period");
     if (this.#permit(group) === null) {
@@ -892,12 +916,22 @@ export class MergeMachine {
   }
 
   async #restoreOrWait(group: GroupRow): Promise<Step> {
-    // A delete still waiting for the API must settle before anything is restored.
+    // Every delete still waiting for the API (either side may have one) must
+    // settle before anything is restored. All of them are re-checked each
+    // tick, so one lagging member does not hide another's 404 or expiry.
+    let waiting: Wait | null = null;
     for (const id of this.#members(group)) {
       if (this.#knownGone(id)) continue;
       const sent = this.#sentDelete(id);
-      if (sent !== null && sent.status !== "failed") await this.#awaitSentDelete(group, sent);
+      if (sent === null || sent.status === "failed") continue;
+      try {
+        await this.#awaitSentDelete(group, sent);
+      } catch (error) {
+        if (!(error instanceof Wait)) throw error;
+        waiting ??= error;
+      }
     }
+    if (waiting !== null) throw waiting;
     const { deletedIds } = requireGroup(this.#db, group.id);
     if (deletedIds.length === 0) throw new Wait("frozen");
     return { to: "b_restore", event: "frozen_mid_path_b", evidence: { deleted: deletedIds } };
@@ -1240,6 +1274,40 @@ export class MergeMachine {
 
   // -------------------------------------------------------------------------
   // Deletion: the only place a DeletionAuthorization is minted.
+
+  /**
+   * Delete several activities of one group: send every delete first, and
+   * only then wait for the API confirmations, so their lags overlap.
+   *
+   * The ONLY condition that lets the loop go on to the next member is
+   * `Wait("deletion_confirming")`: that member's delete is sent (now or on an
+   * earlier tick) and merely waits for the API 404. Everything else stops
+   * the loop at once and nothing further is sent: frozen, the owner's
+   * go-ahead missing, a refused authorization, a delete whose outcome is
+   * unknown or expired (those freeze), a paused, logged-out or challenged
+   * web session, a failed check, a park, and any transient or unexpected
+   * error (the latter freeze in `#onError`, after this loop would have run).
+   *
+   * Members whose delete is already sent or recorded gone go first: they
+   * only read, and one of them expiring freezes before any new delete goes
+   * out. Each new delete still gets its own freeze and permit re-check,
+   * fresh backup, snapshot and authorization inside `#guardedDelete`.
+   */
+  async #deleteAll(group: GroupRow, ids: readonly number[], reason: DeletionReason): Promise<void> {
+    const settled = (id: number): boolean =>
+      requireActivity(this.#db, id).goneAt !== null || this.#sentDelete(id) !== null;
+    const ordered = [...ids.filter(settled), ...ids.filter((id) => !settled(id))];
+    let waiting = false;
+    for (const id of ordered) {
+      try {
+        await this.#guardedDelete(group, id, reason);
+      } catch (error) {
+        if (!(error instanceof Wait) || error.reason !== "deletion_confirming") throw error;
+        waiting = true;
+      }
+    }
+    if (waiting) throw new Wait("deletion_confirming");
+  }
 
   async #guardedDelete(group: GroupRow, id: number, reason: DeletionReason): Promise<void> {
     if (this.#knownGone(id)) return;

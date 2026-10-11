@@ -98,12 +98,15 @@ describe("deletion guards", () => {
     expect(h.freeze.state().reason).toMatch(/not confirmed by the API within 60 minutes/);
     expect(h.notifier.kinds()).toContain("deletion_unconfirmed");
     expect(outing.fitbit.exists).toBe(true);
-    expect(writesFor(h.db, { kind: "delete" })).toHaveLength(1);
+    // Both deletes were sent in the first tick, each exactly once.
+    expect(writesFor(h.db, { kind: "delete" })).toHaveLength(2);
     expect(writesFor(h.db, { kind: "delete" })[0]).toMatchObject({
       status: "failed",
       result: { stillExists: true, webError: null },
     });
-    expect(h.session.calls.filter((c) => c.op === "delete")).toHaveLength(1);
+    expect(h.session.calls.filter((c) => c.op === "delete")).toHaveLength(2);
+    await h.machine.tick();
+    expect(h.session.calls.filter((c) => c.op === "delete")).toHaveLength(2);
     expect(listGroups(h.db)[0]?.status).toBe("b_delete_fitbit");
   });
 
