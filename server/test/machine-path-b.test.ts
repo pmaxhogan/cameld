@@ -32,7 +32,7 @@ describe("path B (the live norm: strava rejects the merge while originals exist)
     expect(h.notifier.kinds()).toContain("parked");
   });
 
-  it("deletes the fitbit then the app original, uploads, carries metadata and verifies", async () => {
+  it("deletes both originals in one step, uploads once, carries metadata and verifies", async () => {
     h = await createHarness({ settings: { switches: { delete: true } } });
     const outing = addOuting(h.world, { withPhoto: true });
     await h.poller.poll();
@@ -40,7 +40,14 @@ describe("path B (the live norm: strava rejects the merge while originals exist)
     expect(group?.lastError).toBeNull();
     expect(group?.status).toBe("done");
     expect(h.session.deleted).toEqual([outing.fitbit.id, outing.app.id]);
-    expect(uploadCount(h, group!.externalId)).toBe(3);
+    // One rejected upload, then exactly one more after both deletes.
+    expect(uploadCount(h, group!.externalId)).toBe(2);
+    const reached = groupEvents(h.db, group!.id).map((e) => e.to);
+    expect(reached).not.toContain("b_retry_1");
+    expect(reached).not.toContain("b_delete_app");
+    expect(reached).toEqual(
+      expect.arrayContaining(["b_rejected", "b_delete_fitbit", "b_retry_2", "uploaded", "done"]),
+    );
     const merged = h.world.get(group!.mergedActivityId!)!;
     expect(merged.name).toBe("Quillmere Tempo");
     expect(merged.privateNote).toContain("merged by cameld");
@@ -96,6 +103,7 @@ describe("path B (the live norm: strava rejects the merge while originals exist)
     expect(group?.status).toBe("failed");
     expect(h.freeze.isFrozen()).toBe(true);
     expect(h.session.deleted).toEqual([outing.fitbit.id, outing.app.id]);
+    expect(uploadCount(h, group!.externalId)).toBe(2);
     const restored = h.world.live().filter((a) => !a.externalId?.startsWith("cameld-merge-"));
     expect(restored.map((a) => a.externalId).sort()).toEqual(
       [outing.app.externalId, outing.fitbit.externalId].sort(),
@@ -114,8 +122,8 @@ describe("path B (the live norm: strava rejects the merge while originals exist)
   it("flags a restore that strava rejects as a duplicate and keeps it in the backup", async () => {
     h = await createHarness({ settings: { switches: { delete: true } } });
     const outing = addOuting(h.world);
-    // The merge is refused after the first delete with a processing error; the
-    // restore of the wrist copy is refused as a duplicate of the app copy.
+    // The merge is refused after both deletes with a processing error; the
+    // restore of the wrist copy is then refused as a duplicate.
     h.world.duplicatePolicy = (incoming) =>
       h.world.live().some((a) => a.id === outing.fitbit.id) ||
       incoming.externalId === outing.fitbit.externalId
@@ -135,7 +143,10 @@ describe("path B (the live norm: strava rejects the merge while originals exist)
     expect(group?.status).toBe("restore_flagged");
     expect(h.freeze.isFrozen()).toBe(true);
     expect(h.notifier.kinds()).toContain("restore_flagged");
-    expect(h.session.deleted).toEqual([outing.fitbit.id]);
+    expect(h.session.deleted).toEqual([outing.fitbit.id, outing.app.id]);
+    // The phone copy was restored; the wrist copy stays in the backup, flagged.
+    expect(h.world.live().some((a) => a.externalId === outing.app.externalId)).toBe(true);
+    expect(h.world.live().some((a) => a.externalId === outing.fitbit.externalId)).toBe(false);
   });
 
   it("restores instead of uploading when a freeze lands mid path B", async () => {
@@ -158,6 +169,9 @@ describe("path B (the live norm: strava rejects the merge while originals exist)
     const [group] = listGroups(h.db);
     expect(group?.status).toBe("failed");
     expect(groupEvents(h.db, group!.id).map((e) => e.event)).toContain("frozen_mid_path_b");
+    // The freeze landed after the first delete: the second was never sent.
+    expect(h.session.deleted).toEqual([outing.fitbit.id]);
+    expect(outing.app.exists).toBe(true);
     expect(h.world.live().some((a) => a.externalId === outing.fitbit.externalId)).toBe(true);
     expect(h.world.live().some((a) => a.externalId?.startsWith("cameld-merge-"))).toBe(false);
   });

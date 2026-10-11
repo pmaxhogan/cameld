@@ -228,20 +228,22 @@ describe("crash and resume: a delete is never repeated", () => {
     h.restart();
     await h.machine.tick();
     // The API still lists it: the intent may have been sent and not seen yet.
+    // The other member's delete is sent in the same tick.
     expect(writesFor(h.db, { kind: "delete" }).map((w) => [w.targetId, w.status])).toEqual([
       [outing.fitbit.id, "sent"],
+      [outing.app.id, "done"],
     ]);
-    expect(h.session.deleted).toEqual([]);
+    expect(h.session.deleted).toEqual([outing.app.id]);
     expect(requireGroup(h.db, group.id).lastError).toBe("wait:deletion_confirming");
     // A sent delete would have reached the API within the window: it was never sent.
     h.clock.t += 61 * 60_000;
     await h.machine.tick();
     expect(writesFor(h.db, { kind: "delete" }).map((w) => [w.targetId, w.status])).toEqual([
       [outing.fitbit.id, "failed"],
-      [outing.fitbit.id, "done"],
       [outing.app.id, "done"],
+      [outing.fitbit.id, "done"],
     ]);
-    expect(h.session.deleted).toEqual([outing.fitbit.id, outing.app.id]);
+    expect(h.session.deleted).toEqual([outing.app.id, outing.fitbit.id]);
     expect(requireGroup(h.db, group.id).status).toBe("done");
   });
 });
