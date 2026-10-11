@@ -308,6 +308,33 @@ describe("path B: both deletes are sent in one step", () => {
     expect(uploadCount(h, group.externalId)).toBe(1);
   });
 
+  it("restores nothing and sends nothing when both sent deletes expire unconfirmed while frozen", async () => {
+    h = await createHarness({ settings: { switches: { delete: true } } });
+    const outing = addOuting(h.world);
+    h.world.apiLags = () => true;
+    await h.poller.poll();
+    const group = listGroups(h.db)[0]!;
+    expect(deleteCalls(h)).toHaveLength(2);
+    await h.freeze.freeze("synthetic failure elsewhere", null);
+    h.clock.t += 61 * MINUTE;
+    await h.machine.tick();
+    // Both are past the window: each is expired and reported in the same tick.
+    expect(requireGroup(h.db, group.id).lastError).toBe("wait:deletion_unconfirmed");
+    expect(h.notifier.kinds().filter((k) => k === "deletion_unconfirmed")).toHaveLength(2);
+    expect(writesFor(h.db, { kind: "delete" }).map((w) => w.status)).toEqual(["failed", "failed"]);
+    await h.machine.tick();
+    const after = requireGroup(h.db, group.id);
+    expect(after).toMatchObject({
+      status: "b_delete_fitbit",
+      lastError: "wait:frozen",
+      deletedIds: [],
+    });
+    expect(h.notifier.kinds().filter((k) => k === "deletion_unconfirmed")).toHaveLength(2);
+    expect(deleteCalls(h)).toHaveLength(2);
+    expect(uploadCount(h, group.externalId)).toBe(1);
+    expect(isLive(h, outing.app) || isLive(h, outing.fitbit)).toBe(false);
+  });
+
   it("keeps waiting, frozen, when the lookup of a sent delete fails", async () => {
     h = await createHarness({ settings: { switches: { delete: true } } });
     const outing = addOuting(h.world);
