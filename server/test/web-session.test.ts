@@ -113,6 +113,28 @@ describe("WebSession edge paths", () => {
     expect(evaluated).toBe(0);
   });
 
+  it("reports a form that vanishes between two reads as a page without the form", async () => {
+    const snapshots = [{ entries: [["authenticity_token", "synthetic"]], csrfToken: null }, null];
+    const page = {
+      ...stubPage(),
+      goto: () => Promise.resolve({ status: () => 200 }),
+      url: () => "https://www.strava.com/activities/1/edit",
+      content: () => Promise.resolve("<html><body>synthetic</body></html>"),
+      waitForFunction: () => Promise.resolve(),
+      evaluate: () => Promise.resolve(snapshots.shift() ?? null),
+    };
+    const web = new WebSession({
+      cdpUrl: "http://browser.example.test:9222",
+      connect: () =>
+        Promise.resolve(
+          stubBrowser([{ newPage: () => Promise.resolve(page as unknown as StubPage) }]),
+        ),
+      formStableIntervalMs: 0,
+    });
+    await expect(web.getEditForm(1)).rejects.toThrow("/activities/1/edit has no activity form");
+    expect(snapshots).toEqual([]);
+  });
+
   it("disconnect without a connection is a no-op", async () => {
     await new WebSession({ cdpUrl: "http://browser.example.test:9222" }).disconnect();
   });

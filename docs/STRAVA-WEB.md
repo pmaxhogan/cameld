@@ -103,7 +103,27 @@ cookies alive (an integration test checks this).
   `authenticity_token`, a CHECKED `activity[visibility]` radio and the
   `activity[private_note]` field. If it is not hydrated in time it throws
   `WebNotReadyError` (`not_ready`) and sends nothing; a page with no activity
-  form at all is still `WebUnexpectedResponseError`. Independently, every
+  form at all is still `WebUnexpectedResponseError`.
+- Those three markers are not the whole form. React goes on setting other
+  controls after they appear: live, a `setVisibility` read
+  `activity[selected_polyline_style]` (a `<select>`) on one value before the
+  save and on another after it, and the false "re-read form disagrees"
+  froze writes. Worse, an edit POSTs every entry back, so a placeholder read
+  that early would be written to Strava. So after the markers every form
+  read (edit, delete, photo attach, backup) takes snapshots
+  `formStableIntervalMs` apart (default 250) until two in a row have
+  identical entries, and uses the last. That costs one interval per read
+  when the form is already settled. A form still changing after
+  `formHydrationTimeoutMs` throws `WebNotReadyError` ("kept changing",
+  naming the fields that moved) and nothing is sent. A control React sets
+  later than one quiet interval is not caught by this.
+- A failed verification (`WebVerificationError`) names the fields in its
+  message and carries `changes`: per field the before and after values, cut
+  to 64 characters, for fixed-vocabulary controls only (selects, radios,
+  checkboxes, and the hidden photo `rank` / `media_type`). Anything that may
+  be the owner's text (name, description, private note, captions, any other
+  text or hidden input) is `<redacted>`.
+- Independently, every
   POST of the form (edit, delete, photo attach) refuses with
   `WebNotReadyError` if the body it is about to send lacks any of those
   required fields (`assertSubmittable`).
@@ -234,6 +254,8 @@ resets any field missing from a PATCH, carries a `data-method=delete` Log Out
 link on every page, and has modes for expiry, captcha, 403, 429, refused
 `request_otp`, slow pages and failed saves, plus a `hangUrl` page that wedges its tab. Its visibility control is radios,
 like Strava's; `late_hydration` injects them by script `hydrateMs` (1500)
-after load and `never_hydrates` never does. The integration tests spawn a real
+after load and `never_hydrates` never does; `late_style` sets the map style
+select by script `styleMs` (150) after the markers are already there, and
+`unstable_form` keeps changing a hidden field. The integration tests spawn a real
 Chromium with `--remote-debugging-port` and connect over CDP, like the
 sidecar. CI installs it with `npx playwright install --with-deps chromium`.

@@ -129,6 +129,7 @@ export class FakeWebSession implements StravaWebSession {
       authenticityToken: "synthetic-auth",
       entries: [],
       values: this.#values(a),
+      controlled: [],
     };
   }
 

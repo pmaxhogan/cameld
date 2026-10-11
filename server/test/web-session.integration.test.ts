@@ -123,6 +123,7 @@ beforeEach(async () => {
   fake.mode = "normal";
   fake.uploadRefusal = null;
   fake.hydrateMs = 1500;
+  fake.styleMs = 150;
   fake.acceptCodes = true;
   fake.activities = new Map(syntheticActivities().map((a) => [a.id, a]));
   fake.mailbox.length = 0;
@@ -292,6 +293,37 @@ describe("edit form", () => {
     expect((moved as WebVerificationError).fields).toEqual(["activity[hide_from_home]"]);
   });
 
+  it("records before and after values of a failed verification, free text redacted", async () => {
+    const session = open();
+    // A radio that did not take the new value: both values are shown.
+    fake.mode = "ignore_patch";
+    const ignored = await session.setVisibility(RUN_ID, "only_me").catch((e: unknown) => e);
+    expect((ignored as WebVerificationError).changes).toEqual([
+      { field: "activity[visibility]", before: "everyone", after: "everyone" },
+    ]);
+    expect((ignored as Error).message).toBe(
+      `activity ${RUN_ID}: re-read form disagrees on activity[visibility]`,
+    );
+    // A textarea: the owner's text never reaches the error or the log.
+    logLines.length = 0;
+    const note = await session
+      .setPrivateNote(RUN_ID, "synthetic new note")
+      .catch((e: unknown) => e);
+    expect((note as WebVerificationError).changes).toEqual([
+      { field: "activity[private_note]", before: "<redacted>", after: "<redacted>" },
+    ]);
+    const logged = logLines.join("");
+    expect(logged).toContain('"changes":[{"field":"activity[private_note]"');
+    expect(logged).not.toContain("synthetic note");
+    expect(logged).not.toContain("synthetic new note");
+    // A checkbox moved by a side effect: shown.
+    fake.mode = "patch_side_effect";
+    const moved = await session.setVisibility(RUN_ID, "only_me").catch((e: unknown) => e);
+    expect((moved as WebVerificationError).changes).toEqual([
+      { field: "activity[hide_from_home]", before: "1", after: "0" },
+    ]);
+  });
+
   it("falls back to the form token when the page has no csrf meta tag", async () => {
     fake.mode = "no_meta";
     const form = await open().getEditForm(RUN_ID);
@@ -335,6 +367,56 @@ describe("form hydration", () => {
     expect((await session.setVisibility(RIDE_ID, "only_me")).visibility).toBe("only_me");
     const body = posts()[0]?.body as [string, string][];
     expect(body).toContainEqual(["activity[visibility]", "followers_only"]);
+  });
+
+  it("waits for a control that React sets after the hydration markers appear", async () => {
+    fake.mode = "late_style";
+    const session = open();
+    // Read at the markers, the select would still show its placeholder.
+    const form = await session.getEditForm(RIDE_ID);
+    expect(form.entries).toContainEqual(["activity[selected_polyline_style]", "pace"]);
+    expect(form.controlled).toContain("activity[selected_polyline_style]");
+    expect(form.controlled).not.toContain("activity[private_note]");
+    expect((await session.setVisibility(RIDE_ID, "only_me")).visibility).toBe("only_me");
+    // The save sent the hydrated value back, not the placeholder.
+    const body = posts()[0]?.body as [string, string][];
+    expect(body.filter(([name]) => name === "activity[selected_polyline_style]")).toEqual([
+      ["activity[selected_polyline_style]", "pace"],
+    ]);
+    expect(fake.activities.get(RIDE_ID)).toMatchObject({
+      visibility: "only_me",
+      polylineStyle: "pace",
+    });
+  });
+
+  it("costs one extra interval when the form is already stable", async () => {
+    const started = Date.now();
+    await open({ formStableIntervalMs: 400 }).getEditForm(RIDE_ID);
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeGreaterThanOrEqual(400);
+    expect(elapsed).toBeLessThan(800 + 2000);
+  });
+
+  it("throws WebNotReadyError and never posts when the form never stops changing", async () => {
+    fake.mode = "unstable_form";
+    const session = open({ formHydrationTimeoutMs: 600, formStableIntervalMs: 100 });
+    const read = await session.getEditForm(RIDE_ID).catch((e: unknown) => e);
+    expect(read).toBeInstanceOf(WebNotReadyError);
+    expect((read as WebNotReadyError).fields).toEqual(["activity[synthetic_tick]"]);
+    expect((read as Error).message).toBe(
+      `/activities/${RIDE_ID}/edit form is not ready (kept changing for 600 ms): changing activity[synthetic_tick]`,
+    );
+    await expect(session.setVisibility(RIDE_ID, "only_me")).rejects.toBeInstanceOf(
+      WebNotReadyError,
+    );
+    await expect(session.deleteActivity(RIDE_ID, authorize(RIDE_ID))).rejects.toBeInstanceOf(
+      WebNotReadyError,
+    );
+    expect(posts()).toEqual([]);
+    expect(fake.activities.get(RIDE_ID)).toMatchObject({
+      visibility: "followers_only",
+      exists: true,
+    });
   });
 
   it("throws WebNotReadyError and never posts when the page never hydrates", async () => {

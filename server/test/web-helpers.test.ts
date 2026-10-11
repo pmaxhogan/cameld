@@ -20,12 +20,15 @@ import {
 import {
   buildSubmission,
   changedFields,
+  describeChanges,
   FIELD,
   type FormEntries,
   lastValue,
   missingRequiredFields,
   photoIds,
   readValues,
+  REDACTED,
+  sameEntries,
   setEntry,
 } from "../src/web/forms.ts";
 import {
@@ -267,6 +270,58 @@ describe("form entries", () => {
     expect(changedFields(entries, entries)).toEqual([]);
     expect(changedFields([["a", "x\r\ny"]], [["a", "x\ny"]])).toEqual([]);
     expect(changedFields([["a", "1"]], [["b", "1"]])).toEqual(["a", "b"]);
+  });
+
+  it("compares snapshots entry by entry, in order", () => {
+    expect(sameEntries(entries, [...entries])).toBe(true);
+    expect(sameEntries([], [])).toBe(true);
+    expect(sameEntries(entries, entries.slice(1))).toBe(false);
+    expect(sameEntries([["a", "1"]], [["a", "2"]])).toBe(false);
+    expect(sameEntries([["a", "1"]], [["b", "1"]])).toBe(false);
+    expect(
+      sameEntries(
+        [
+          ["a", "1"],
+          ["b", "2"],
+        ],
+        [
+          ["b", "2"],
+          ["a", "1"],
+        ],
+      ),
+    ).toBe(false);
+  });
+
+  it("describes changes, showing values of fixed-vocabulary fields only", () => {
+    const before: FormEntries = [
+      ["activity[name]", "Synthetic Name"],
+      ["activity[selected_polyline_style]", "default"],
+      ["activity[synthetic_hidden]", "synthetic words"],
+      ["photos[p-1][rank]", "1"],
+      ["photos[p-1][caption]", "synthetic caption"],
+    ];
+    const after: FormEntries = [
+      ["activity[name]", "Other Synthetic Name"],
+      ["activity[selected_polyline_style]", "pace"],
+      ["photos[p-1][rank]", "2"],
+      ["photos[p-1][caption]", ""],
+      ["activity[flag]", "x".repeat(100)],
+    ];
+    const names = [...before, ...after].map(([name]) => name);
+    expect(
+      describeChanges(names, before, after, [
+        "activity[selected_polyline_style]",
+        "activity[flag]",
+      ]),
+    ).toEqual([
+      { field: "activity[name]", before: REDACTED, after: REDACTED },
+      { field: "activity[selected_polyline_style]", before: "default", after: "pace" },
+      { field: "activity[synthetic_hidden]", before: REDACTED, after: null },
+      { field: "photos[p-1][rank]", before: "1", after: "2" },
+      { field: "photos[p-1][caption]", before: REDACTED, after: REDACTED },
+      { field: "activity[flag]", before: null, after: "x".repeat(64) },
+    ]);
+    expect(REDACTED).toBe("<redacted>");
   });
 
   it("finds photo ids", () => {

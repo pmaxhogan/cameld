@@ -61,7 +61,14 @@ export type FakeMode =
    */
   | "late_hydration"
   /** The visibility radios never appear (the page never hydrates). */
-  | "never_hydrates";
+  | "never_hydrates"
+  /**
+   * The hydration markers are there at load, but the map style select still
+   * shows its placeholder ("default") and is set by script `styleMs` later.
+   */
+  | "late_style"
+  /** A hidden field of the form changes every few ms, forever. */
+  | "unstable_form";
 
 export interface RecordedRequest {
   method: string;
@@ -89,6 +96,8 @@ export interface FakeStrava {
   slowMs: number;
   /** Delay before the late_hydration script injects the visibility radios. */
   hydrateMs: number;
+  /** Delay before the late_style script sets the map style select. */
+  styleMs: number;
   activities: Map<number, FakeActivity>;
   requests: RecordedRequest[];
   /** Login codes "emailed" by request_otp, newest last. */
@@ -161,6 +170,9 @@ function radios(name: string, values: string[], current: string): string {
 }
 
 type Hydration = "server" | "late" | "never";
+type StyleScript = { kind: "none" } | { kind: "late"; ms: number } | { kind: "unstable" };
+
+const POLYLINE_STYLES = ["default", "activity_shorts", "pace", "heatmap"];
 
 function editPage(
   activity: FakeActivity,
@@ -169,6 +181,7 @@ function editPage(
   withMeta: boolean,
   hydration: Hydration = "server",
   hydrateMs = 0,
+  style: StyleScript = { kind: "none" },
 ): string {
   const visibility = radios(
     "activity[visibility]",
@@ -187,6 +200,19 @@ function editPage(
   document.getElementById("visibility-slot").appendChild(template.content.cloneNode(true));
 }, ${hydrateMs});</script>`
       : "";
+  // late: the select starts on its placeholder and the script sets the real
+  // value, like React does after the hydration markers are already there.
+  const styleShown = style.kind === "late" ? "default" : activity.polylineStyle;
+  const styleScript =
+    style.kind === "late"
+      ? `<script>setTimeout(() => {
+  document.querySelector('select[name="activity[selected_polyline_style]"]').value = ${JSON.stringify(activity.polylineStyle)};
+}, ${style.ms});</script>`
+      : style.kind === "unstable"
+        ? `<script>setInterval(() => {
+  document.querySelector('input[name="activity[synthetic_tick]"]').value = String(performance.now());
+}, 20);</script>`
+        : "";
   const photos = activity.photos
     .map(
       (p) =>
@@ -211,12 +237,14 @@ ${visibilityHtml}
 ${checkbox("activity[prefer_perceived_exertion]", activity.preferPerceivedExertion)}
 ${checkbox("activity[hide_from_home]", activity.hideFromHome)}
 ${checkbox("activity[commute]", activity.commute)}
+<select name="activity[selected_polyline_style]">${POLYLINE_STYLES.map((v) => option(v, styleShown)).join("")}</select>
+${style.kind === "unstable" ? '<input type="hidden" name="activity[synthetic_tick]" value="0">' : ""}
 ${photos}
 <input type="file" name="activity[photo_file]">
 <button type="submit" name="commit" value="Save">Save</button>
 </form>
 <a data-method="delete" data-confirm="Are you sure?" href="/activities/${activity.id}" rel="nofollow">Delete</a>
-${script}`;
+${script}${styleScript}`;
   return layout(
     `Edit ${activity.name}`,
     withForm ? form : "<p>Edit is unavailable.</p>",
@@ -259,6 +287,7 @@ function applyPatch(activity: FakeActivity, entries: [string, string][], uploade
   activity.preferPerceivedExertion = last(entries, "activity[prefer_perceived_exertion]") === "1";
   activity.hideFromHome = last(entries, "activity[hide_from_home]") === "1";
   activity.commute = last(entries, "activity[commute]") === "1";
+  activity.polylineStyle = last(entries, "activity[selected_polyline_style]") ?? "default";
   const photos = new Map<string, { rank: number; mediaType: number; caption: string }>();
   for (const [key, value] of entries) {
     const match = /^photos\[([^\]]+)\]\[(rank|media_type|caption)\]$/.exec(key);
@@ -288,6 +317,7 @@ export async function startFakeStrava(): Promise<FakeStrava> {
     mode: "normal",
     slowMs: 5000,
     hydrateMs: 1500,
+    styleMs: 150,
     activities: new Map(syntheticActivities().map((a) => [a.id, a])),
     requests: [],
     mailbox: [],
@@ -461,6 +491,11 @@ export async function startFakeStrava(): Promise<FakeStrava> {
           fake.mode !== "no_meta",
           hydration,
           fake.hydrateMs,
+          fake.mode === "late_style"
+            ? { kind: "late", ms: fake.styleMs }
+            : fake.mode === "unstable_form"
+              ? { kind: "unstable" }
+              : { kind: "none" },
         ),
       );
   });

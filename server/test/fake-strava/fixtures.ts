@@ -28,6 +28,8 @@ export interface FakeActivity {
   preferPerceivedExertion: boolean;
   hideFromHome: boolean;
   commute: boolean;
+  /** `activity[selected_polyline_style]`: "default" or a map style. */
+  polylineStyle: string;
   photos: FakePhoto[];
   original: { filename: string; contentType: string; bytes: Buffer };
   gpx: string;
@@ -84,6 +86,7 @@ export function syntheticActivities(): FakeActivity[] {
       preferPerceivedExertion: true,
       hideFromHome: true,
       commute: false,
+      polylineStyle: "default",
       photos: [{ uuid: "synthetic-photo-0001", rank: 1, mediaType: 1, caption: "Synthetic" }],
       original: {
         filename: "quillmere-canal-run.gpx",
@@ -104,6 +107,7 @@ export function syntheticActivities(): FakeActivity[] {
       preferPerceivedExertion: false,
       hideFromHome: false,
       commute: true,
+      polylineStyle: "pace",
       photos: [],
       original: {
         filename: "evening-ride.fit",
