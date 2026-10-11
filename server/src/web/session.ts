@@ -13,7 +13,14 @@ import {
   remediationAllowed,
   type RemediationReport,
 } from "./cdp-remediation.ts";
-import { classify, isLoginPath, looksLikeChallenge, parseContentDisposition } from "./classify.ts";
+import {
+  classify,
+  classifyUpload,
+  isLoginPath,
+  looksLikeChallenge,
+  parseContentDisposition,
+  uploadErrorCode,
+} from "./classify.ts";
 import { DeletionAuthorization } from "./deletion-authorization.ts";
 import {
   BrowserUnavailableError,
@@ -599,7 +606,9 @@ export class WebSession implements StravaWebSession {
    * whether the edit form lists the new photo afterwards (hence `verified`).
    *
    * 1. `PUT /photos/metadata` -> `{uri, header}`
-   * 2. `PUT <uri>` with the bytes and the returned headers
+   * 2. `PUT <uri>` with the bytes and the returned headers. The uri is on
+   *    another host, so a refusal there is a WebUnexpectedResponseError and
+   *    never a challenge (see `#fetch`).
    * 3. save the edit form with `photos[<uuid>][rank|media_type|caption]`
    */
   async attachPhoto(activityId: number, photo: AttachPhotoInput): Promise<AttachPhotoResult> {
@@ -836,13 +845,27 @@ export class WebSession implements StravaWebSession {
       credentials,
     });
     const bytes = Buffer.from(response.bodyBase64, "base64");
-    const isHtml = (response.headers["content-type"] ?? "").startsWith("text/html");
-    const path = new URL(url).pathname;
-    const error = classify(
-      { status: response.status, url: response.url, html: isHtml ? bytes.toString("utf8") : "" },
-      { path, allowNotFound },
-    );
-    if (error !== null) throw error;
+    // Only strava.com's own answers can mean "logged out" or "challenged".
+    // Any other host is the presigned photo upload target.
+    if (new URL(url).origin !== new URL(this.#baseUrl).origin) {
+      const text = bytes.toString("utf8");
+      const refused = classifyUpload(response.status, text);
+      if (refused !== null) {
+        // The error code only: never the body, the headers or the URL.
+        this.#log?.warn(
+          { status: response.status, uploadCode: uploadErrorCode(text) },
+          "photo upload host refused the upload",
+        );
+        throw refused;
+      }
+    } else {
+      const isHtml = (response.headers["content-type"] ?? "").startsWith("text/html");
+      const error = classify(
+        { status: response.status, url: response.url, html: isHtml ? bytes.toString("utf8") : "" },
+        { path: new URL(url).pathname, allowNotFound },
+      );
+      if (error !== null) throw error;
+    }
     return {
       status: response.status,
       url: response.url,

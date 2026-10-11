@@ -153,6 +153,12 @@ list) for roughly 15 to 25 minutes. So:
    session, a failed check, a park, and any transient or unexpected error.
    Each delete keeps its own freeze and go-ahead re-check, fresh verified
    backup, snapshot and single-use authorization.
+8. A new delete is not prepared while it cannot be sent: when the web
+   session is paused or no browser is configured, the delete step waits
+   (`wait:web_paused`) right after the freeze and go-ahead checks, BEFORE
+   the fresh backup, the snapshot and the authorization. Otherwise every
+   tick of an outage would redo them and keep one more snapshot. Deletes
+   already sent are still re-checked through the API meanwhile.
 
 `cameld_delete_confirmation_delay_seconds` records the time from sending a
 delete to the API 404.
@@ -176,6 +182,9 @@ delete to the API 404.
   archived in the backup and the pair is flagged.
 - **Captcha or verification challenge** parks the affected work and pauses all
   web-session actions until login is healthy. It does not stop API backups.
+  Only answers from strava.com itself count: a refusal by another host (the
+  presigned photo upload target) is that photo's failure, names the status
+  and the storage error code only, and never pauses web actions.
 - **Hung browser tab.** When attaching over CDP fails while the browser's
   DevTools HTTP endpoint still answers (a tab wedged after a sidecar
   restart), the web session probes each page tab, opens `about:blank`, closes

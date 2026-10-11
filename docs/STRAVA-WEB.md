@@ -68,6 +68,13 @@ Delete notes:
   attaches it. Captions: `PUT /media/<type>/<id>/add_caption`.
 - Unverified until the first real upload: the presigned upload host, and
   photo removal.
+- The upload host is not strava.com, so its answers are never read as a
+  login redirect or a challenge and never pause the web gate. Any non-2xx is
+  a `WebUnexpectedResponseError` "photo upload host returned <status>
+  (<Code>)", where `<Code>` is the code of an S3-style XML error body
+  (`SignatureDoesNotMatch`, `AccessDenied`, `RequestExpired`, ...) when
+  there is one. The body, the headers, the URL (it carries the signature)
+  and the object key are never logged or put in an error.
 
 ## Implementation (server/src/web/)
 

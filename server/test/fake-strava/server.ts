@@ -95,6 +95,14 @@ export interface FakeStrava {
    * never blocks the fake strava.com pages.
    */
   hangUrl: string;
+  /**
+   * Origin of the photo upload bucket. Like the real presigned target it is
+   * NOT the strava.com origin (`localhost` instead of 127.0.0.1), so the
+   * in-page PUT is cross-origin and the bucket answers CORS.
+   */
+  uploadBaseUrl: string;
+  /** When set, the bucket answers every upload with this instead of storing it. */
+  uploadRefusal: { status: number; contentType: string; body: string } | null;
   expireSessions(): void;
   close(): Promise<void>;
 }
@@ -276,6 +284,8 @@ export async function startFakeStrava(): Promise<FakeStrava> {
     acceptCodes: true,
     sessionUrl: "",
     hangUrl: "",
+    uploadBaseUrl: "",
+    uploadRefusal: null,
     expireSessions: () => sessions.clear(),
     close: () => app.close(),
   };
@@ -512,12 +522,28 @@ export async function startFakeStrava(): Promise<FakeStrava> {
     const signature = randomBytes(8).toString("hex");
     uploads.set(uuid, { signature, bytes: null });
     return reply.send({
-      uri: `${fake.baseUrl}/upload-bucket/${uuid}?X-Synthetic-Signature=${signature}`,
+      uri: `${fake.uploadBaseUrl}/upload-bucket/${uuid}?X-Synthetic-Signature=${signature}`,
       header: { "x-fake-upload-signature": signature },
     });
   });
 
+  // The bucket is another origin: answer the preflight and expose every answer.
+  app.options("/upload-bucket/:uuid", (_request, reply) =>
+    reply
+      .code(204)
+      .header("access-control-allow-origin", "*")
+      .header("access-control-allow-methods", "PUT")
+      .header("access-control-allow-headers", "content-type, x-fake-upload-signature")
+      .send(),
+  );
+
   app.put<{ Params: { uuid: string } }>("/upload-bucket/:uuid", (request, reply) => {
+    void reply.header("access-control-allow-origin", "*");
+    if (fake.uploadRefusal !== null)
+      return reply
+        .code(fake.uploadRefusal.status)
+        .type(fake.uploadRefusal.contentType)
+        .send(fake.uploadRefusal.body);
     const pending = uploads.get(request.params.uuid);
     if (pending === undefined || request.headers["x-fake-upload-signature"] !== pending.signature)
       return reply.code(403).send("bad signature");
@@ -537,5 +563,6 @@ export async function startFakeStrava(): Promise<FakeStrava> {
   fake.baseUrl = `http://127.0.0.1:${port}`;
   fake.sessionUrl = `${fake.baseUrl}/__test/session`;
   fake.hangUrl = `http://localhost:${port}/__test/hang`;
+  fake.uploadBaseUrl = `http://localhost:${port}`;
   return fake;
 }

@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   classify,
+  classifyUpload,
   isLoginPath,
   looksLikeChallenge,
   parseContentDisposition,
+  uploadErrorCode,
 } from "../src/web/classify.ts";
 import { DeletionAuthorization, type DeletionEvidence } from "../src/web/deletion-authorization.ts";
 import {
@@ -76,6 +78,49 @@ describe("classify", () => {
     expect(classify({ ...ok, status: 0 }, { path: "/a" })).toBeInstanceOf(
       WebUnexpectedResponseError,
     );
+  });
+});
+
+describe("classifyUpload", () => {
+  const s3 = (code: string) =>
+    `<?xml version="1.0" encoding="UTF-8"?>\n<Error><Code>${code}</Code>` +
+    "<Message>synthetic</Message><Key>synthetic/key.jpg</Key></Error>";
+
+  it("accepts any 2xx", () => {
+    expect(classifyUpload(200, "")).toBeNull();
+    expect(classifyUpload(204, s3("AccessDenied"))).toBeNull();
+  });
+
+  it("turns every other status into an unexpected response, never a login or challenge", () => {
+    for (const status of [0, 301, 401, 403, 404, 429, 500]) {
+      const error = classifyUpload(status, '<title>Just a moment</title><div class="g-recaptcha">');
+      expect(error?.constructor).toBe(WebUnexpectedResponseError);
+      expect(error?.message).toBe(`photo upload host returned ${status}`);
+    }
+  });
+
+  it("names the S3 error code and nothing else of the body", () => {
+    for (const code of ["SignatureDoesNotMatch", "AccessDenied", "RequestExpired"]) {
+      expect(uploadErrorCode(s3(code))).toBe(code);
+      expect(classifyUpload(403, s3(code))?.message).toBe(
+        `photo upload host returned 403 (${code})`,
+      );
+    }
+    expect(uploadErrorCode("<Error>\n  <Code> AccessDenied </Code>\n</Error>")).toBe(
+      "AccessDenied",
+    );
+  });
+
+  it("finds no code in anything that is not an S3 error", () => {
+    expect(uploadErrorCode("")).toBeNull();
+    expect(uploadErrorCode("bad signature")).toBeNull();
+    expect(uploadErrorCode('{"Code":"AccessDenied"}')).toBeNull();
+    expect(uploadErrorCode("<html><Code>AccessDenied</Code></html>")).toBeNull();
+    expect(uploadErrorCode("<Error><Code>synthetic/key.jpg?sig=1</Code></Error>")).toBeNull();
+    expect(uploadErrorCode(`<Error><Code>${"A".repeat(65)}</Code></Error>`)).toBeNull();
+    expect(
+      uploadErrorCode(`<Error>${" ".repeat(5000)}<Code>AccessDenied</Code></Error>`),
+    ).toBeNull();
   });
 });
 
