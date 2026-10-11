@@ -600,13 +600,14 @@ export class WebSession implements StravaWebSession {
   }
 
   /**
-   * Attach a photo the way the edit page's JS does. UNVERIFIED until the
-   * first real upload (docs/STRAVA-WEB.md): the metadata body (media_type 1
-   * for a photo, location null), the presigned upload host and headers, and
+   * Attach a photo the way the edit page's JS does. The metadata call and
+   * its answer are verified live; UNVERIFIED until the first successful real
+   * upload (docs/STRAVA-WEB.md): the upload to the presigned host, and
    * whether the edit form lists the new photo afterwards (hence `verified`).
    *
    * 1. `PUT /photos/metadata` -> `{uri, header}`
-   * 2. `PUT <uri>` with the bytes and the returned headers. The uri is on
+   * 2. `PUT <uri>` with the bytes and the returned headers (`uploadHeaders`:
+   *    they are signed, so they are sent exactly as returned). The uri is on
    *    another host, so a refusal there is a WebUnexpectedResponseError and
    *    never a challenge (see `#fetch`).
    * 3. save the edit form with `photos[<uuid>][rank|media_type|caption]`
@@ -644,7 +645,7 @@ export class WebSession implements StravaWebSession {
         "PUT",
         target.uri,
         { kind: "bytes", base64: photo.bytes.toString("base64") },
-        { "content-type": photo.contentType, ...target.header },
+        uploadHeaders(photo.contentType, target.header),
         false,
         "omit",
       );
@@ -922,7 +923,10 @@ async function closeQuietly(page: Page, timeoutMs: number): Promise<void> {
   }
 }
 
-/** Validate the `{uri, header}` answer of PUT /photos/metadata. */
+/**
+ * Validate the `{uri, header, method}` answer of PUT /photos/metadata. Only
+ * a PUT upload is supported; an answer naming another method is refused.
+ */
 export function parseUploadTarget(body: Buffer): { uri: string; header: Record<string, string> } {
   let parsed: unknown;
   try {
@@ -930,9 +934,14 @@ export function parseUploadTarget(body: Buffer): { uri: string; header: Record<s
   } catch {
     throw new WebUnexpectedResponseError("photo metadata answer is not JSON");
   }
-  const { uri, header = {} } = (typeof parsed === "object" && parsed !== null ? parsed : {}) as {
+  const {
+    uri,
+    header = {},
+    method = "PUT",
+  } = (typeof parsed === "object" && parsed !== null ? parsed : {}) as {
     uri?: unknown;
     header?: unknown;
+    method?: unknown;
   };
   if (
     typeof uri !== "string" ||
@@ -941,5 +950,27 @@ export function parseUploadTarget(body: Buffer): { uri: string; header: Record<s
     !Object.values(header).every((value) => typeof value === "string")
   )
     throw new WebUnexpectedResponseError("photo metadata answer has no upload target");
+  if (typeof method !== "string" || method.toUpperCase() !== "PUT")
+    throw new WebUnexpectedResponseError("photo metadata answer has an unsupported upload method");
   return { uri, header: header as Record<string, string> };
+}
+
+/**
+ * Request headers for the presigned upload. The returned `header` is part of
+ * the signature (live: `Content-Type` and `Host`, capitalised), so its values
+ * win over our own content type, whatever the file is. Names are lower-cased
+ * so one header is never sent twice (the browser would join `content-type`
+ * and `Content-Type` into "a, a" and break the signature). `host` is left
+ * out: a fetch cannot set it, the browser derives it from the URL.
+ */
+export function uploadHeaders(
+  contentType: string,
+  header: Record<string, string>,
+): Record<string, string> {
+  const headers: Record<string, string> = { "content-type": contentType };
+  for (const [name, value] of Object.entries(header)) {
+    const lower = name.toLowerCase();
+    if (lower !== "host") headers[lower] = value;
+  }
+  return headers;
 }

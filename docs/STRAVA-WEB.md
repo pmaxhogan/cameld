@@ -66,8 +66,15 @@ Delete notes:
   `{uri, header}`; `PUT <uri>` with the file and the returned headers;
   then saving the edit form with `photos[<uuid>][rank|media_type|caption]`
   attaches it. Captions: `PUT /media/<type>/<id>/add_caption`.
-- Unverified until the first real upload: the presigned upload host, and
-  photo removal.
+- The metadata answer is verified live: `{uri, header, method, max_size}`.
+  `uri` is a SigV4 presigned URL valid for an hour, `method` is `PUT`, and
+  `header` holds `Content-Type` and `Host` with capitalised names. Both are
+  signed, so the upload sends the returned `Content-Type` as is (whatever
+  the file is), exactly once (names are matched case-insensitively), and
+  never sets `Host` (the browser derives it from the URL). An answer naming
+  another method is refused before anything is uploaded.
+- Still awaiting its first successful live upload: the full attach (the
+  upload itself and the form save), and photo removal.
 - The upload host is not strava.com, so its answers are never read as a
   login redirect or a challenge and never pause the web gate. Any non-2xx is
   a `WebUnexpectedResponseError` "photo upload host returned <status>
@@ -216,8 +223,9 @@ any API confirmation, so the lags overlap. See ARCHITECTURE.md section 5,
 - The athlete-menu selector used for "logged in" (`athleteMenuSelector`).
 - The login page selectors and submitting each step with Enter.
 - Photo upload: the `/photos/metadata` body (`media_type: 1`,
-  `location: null`), the presigned upload host and headers, and whether the
-  edit form lists the new photo afterwards (reported as `verified`).
+  `location: null`) and its answer are verified; the upload to the presigned
+  host and whether the edit form lists the new photo afterwards (reported as
+  `verified`) await the first successful live upload.
 
 ### Tests
 

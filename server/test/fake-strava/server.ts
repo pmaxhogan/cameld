@@ -51,6 +51,8 @@ export type FakeMode =
   | "no_form"
   /** PUT /photos/metadata answers something that is not an upload target. */
   | "bad_metadata"
+  /** PUT /photos/metadata asks for the upload to be a POST. */
+  | "post_upload"
   /** Attached photos never show up on the edit form. */
   | "hide_new_photos"
   /**
@@ -66,12 +68,20 @@ export interface RecordedRequest {
   path: string;
   /** Form entries for urlencoded bodies, parsed JSON, or byte length. */
   body: unknown;
+  contentType: string | undefined;
 }
 
 interface PendingUpload {
   signature: string;
   bytes: Buffer | null;
 }
+
+/** The content type the fake presigned URL is signed for, whatever the file is. */
+export const SIGNED_CONTENT_TYPE = "image/jpeg";
+
+const SIGNATURE_MISMATCH =
+  '<?xml version="1.0" encoding="UTF-8"?>\n<Error><Code>SignatureDoesNotMatch</Code>' +
+  "<Message>The request signature we calculated does not match.</Message></Error>";
 
 export interface FakeStrava {
   baseUrl: string;
@@ -305,6 +315,7 @@ export async function startFakeStrava(): Promise<FakeStrava> {
       method: request.method,
       path: request.url.split("?")[0] as string,
       body: Buffer.isBuffer(request.body) ? request.body.length : request.body,
+      contentType: request.headers["content-type"],
     });
   });
 
@@ -521,9 +532,12 @@ export async function startFakeStrava(): Promise<FakeStrava> {
     const { uuid } = request.body as { uuid: string };
     const signature = randomBytes(8).toString("hex");
     uploads.set(uuid, { signature, bytes: null });
+    // The live shape: capitalised header names, the method and a size limit.
     return reply.send({
       uri: `${fake.uploadBaseUrl}/upload-bucket/${uuid}?X-Synthetic-Signature=${signature}`,
-      header: { "x-fake-upload-signature": signature },
+      header: { "Content-Type": SIGNED_CONTENT_TYPE, Host: new URL(fake.uploadBaseUrl).host },
+      method: fake.mode === "post_upload" ? "POST" : "PUT",
+      max_size: 1_000_000,
     });
   });
 
@@ -533,24 +547,49 @@ export async function startFakeStrava(): Promise<FakeStrava> {
       .code(204)
       .header("access-control-allow-origin", "*")
       .header("access-control-allow-methods", "PUT")
-      .header("access-control-allow-headers", "content-type, x-fake-upload-signature")
+      .header("access-control-allow-headers", "content-type")
       .send(),
   );
 
-  app.put<{ Params: { uuid: string } }>("/upload-bucket/:uuid", (request, reply) => {
-    void reply.header("access-control-allow-origin", "*");
+  app.put<{ Params: { uuid: string }; Querystring: Record<string, string> }>(
+    "/upload-bucket/:uuid",
+    {
+      // Like the real bucket, the signature covers the content type: anything
+      // but exactly the signed value (also "a, a" from a header sent twice)
+      // is refused. Checked before the body parser sees an odd content type.
+      onRequest: (request, reply, done) => {
+        void reply.header("access-control-allow-origin", "*");
+        const pending = uploads.get((request.params as { uuid: string }).uuid);
+        const query = request.query as Record<string, string>;
+        if (
+          fake.uploadRefusal === null &&
+          (pending === undefined ||
+            query["X-Synthetic-Signature"] !== pending.signature ||
+            request.headers["content-type"] !== SIGNED_CONTENT_TYPE)
+        ) {
+          void reply.code(403).type("application/xml").send(SIGNATURE_MISMATCH);
+          return;
+        }
+        done();
+      },
+    },
+    uploadBucket,
+  );
+
+  function uploadBucket(
+    request: FastifyRequest<{ Params: { uuid: string } }>,
+    reply: FastifyReply,
+  ): FastifyReply {
     if (fake.uploadRefusal !== null)
       return reply
         .code(fake.uploadRefusal.status)
         .type(fake.uploadRefusal.contentType)
         .send(fake.uploadRefusal.body);
-    const pending = uploads.get(request.params.uuid);
-    if (pending === undefined || request.headers["x-fake-upload-signature"] !== pending.signature)
-      return reply.code(403).send("bad signature");
+    const pending = uploads.get(request.params.uuid) as PendingUpload;
     pending.bytes = request.body as Buffer;
     uploaded.add(request.params.uuid);
     return reply.code(200).send();
-  });
+  }
 
   // Stand-in for the full-size photo URLs the API lists (a CDN, no session).
   app.get("/media/synthetic-photo.png", (_request, reply) =>
