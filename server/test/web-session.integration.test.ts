@@ -30,7 +30,7 @@ import {
   SYNTHETIC_PNG,
   syntheticActivities,
 } from "./fake-strava/fixtures.ts";
-import { type FakeStrava, startFakeStrava } from "./fake-strava/server.ts";
+import { type FakeStrava, SIGNED_CONTENT_TYPE, startFakeStrava } from "./fake-strava/server.ts";
 import { RecordingNotifier } from "./state-helpers.ts";
 
 /**
@@ -547,6 +547,8 @@ describe("photos", () => {
       (r) => r.method === "PUT" && r.path === `/upload-bucket/${result.uuid}`,
     );
     expect(upload?.body).toBe(SYNTHETIC_PNG.length);
+    // The bucket only takes the signed content type, sent exactly once.
+    expect(upload?.contentType).toBe(SIGNED_CONTENT_TYPE);
     // Like the real presigned target, the bucket is not the strava.com origin.
     expect(new URL(fake.uploadBaseUrl).origin).not.toBe(new URL(fake.baseUrl).origin);
   });
@@ -621,6 +623,11 @@ describe("photos", () => {
     await expect(session.attachPhoto(RUN_ID, photo)).rejects.toBeInstanceOf(
       WebUnexpectedResponseError,
     );
+    fake.mode = "post_upload";
+    await expect(session.attachPhoto(RUN_ID, photo)).rejects.toThrow(
+      "photo metadata answer has an unsupported upload method",
+    );
+    expect(fake.requests.some((r) => r.path.startsWith("/upload-bucket/"))).toBe(false);
     fake.mode = "hide_new_photos";
     expect((await session.attachPhoto(RUN_ID, photo)).verified).toBe(false);
     await expect(session.attachPhoto(RUN_ID, { ...photo, athleteId: 0 })).rejects.toBeInstanceOf(

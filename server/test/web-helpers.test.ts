@@ -28,7 +28,12 @@ import {
   readValues,
   setEntry,
 } from "../src/web/forms.ts";
-import { assertSubmittable, deletionConfirmed, parseUploadTarget } from "../src/web/session.ts";
+import {
+  assertSubmittable,
+  deletionConfirmed,
+  parseUploadTarget,
+  uploadHeaders,
+} from "../src/web/session.ts";
 
 const BASE = "https://www.example.test";
 
@@ -280,6 +285,23 @@ describe("parseUploadTarget", () => {
     expect(parseUploadTarget(json({ uri: "https://up.example.test/2" })).header).toEqual({});
   });
 
+  it("accepts the live shape and only a PUT upload", () => {
+    const live = {
+      uri: "https://up.example.test/3?X-Synthetic-Signature=1",
+      header: { "Content-Type": "image/jpeg", Host: "up.example.test" },
+      max_size: 1000,
+    };
+    for (const method of ["PUT", "put"])
+      expect(parseUploadTarget(json({ ...live, method }))).toEqual({
+        uri: live.uri,
+        header: live.header,
+      });
+    for (const method of ["POST", "", 1, null])
+      expect(() => parseUploadTarget(json({ ...live, method }))).toThrow(
+        "photo metadata answer has an unsupported upload method",
+      );
+  });
+
   it("rejects anything else", () => {
     for (const body of [
       Buffer.from("not json"),
@@ -291,6 +313,25 @@ describe("parseUploadTarget", () => {
     ]) {
       expect(() => parseUploadTarget(body)).toThrow(WebUnexpectedResponseError);
     }
+  });
+});
+
+describe("uploadHeaders", () => {
+  it("sends the signed content type exactly once, whatever the file is", () => {
+    expect(
+      uploadHeaders("image/png", { "Content-Type": "image/jpeg", Host: "up.example.test" }),
+    ).toEqual({ "content-type": "image/jpeg" });
+    expect(uploadHeaders("image/png", { "CONTENT-TYPE": "image/jpeg", HOST: "x" })).toEqual({
+      "content-type": "image/jpeg",
+    });
+  });
+
+  it("keeps our content type when none is returned and lower-cases other headers", () => {
+    expect(uploadHeaders("image/png", {})).toEqual({ "content-type": "image/png" });
+    expect(uploadHeaders("image/png", { "X-Synthetic-Meta": "Kept As Is" })).toEqual({
+      "content-type": "image/png",
+      "x-synthetic-meta": "Kept As Is",
+    });
   });
 });
 
