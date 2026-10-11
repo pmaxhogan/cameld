@@ -138,6 +138,7 @@ export class WebGate {
   async run<T>(action: (session: StravaWebSession) => Promise<T>): Promise<T> {
     const session = this.#session;
     if (session === null || !this.#healthy) {
+      this.#log?.debug({ reason: this.#reason }, "web action refused: web actions are paused");
       throw new WebPausedError(`web actions are paused (${String(this.#reason)})`);
     }
     try {
@@ -146,6 +147,11 @@ export class WebGate {
       if (error instanceof LoginRequiredError) await this.#markUnhealthy("login_required");
       else if (error instanceof ChallengeError)
         await this.#markUnhealthy(`challenge_${error.kind}`);
+      else
+        this.#log?.debug(
+          { errorClass: (error as Error).name },
+          "web action failed; web actions stay open",
+        );
       throw error;
     }
   }
@@ -166,11 +172,16 @@ export class WebGate {
       await this.#markUnhealthy("keepalive_failed");
       return null;
     }
+    this.#log?.debug(
+      { loggedIn: health.loggedIn, reason: health.reason, wasHealthy: this.#healthy },
+      "web keepalive checked",
+    );
     if (health.loggedIn) {
       this.#markHealthy();
       return health;
     }
     if (this.#healthy && health.reason === "login_required") {
+      this.#log?.info("web session expired; trying one automatic login");
       try {
         await session.login();
         this.#markHealthy();

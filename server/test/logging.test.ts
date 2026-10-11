@@ -61,6 +61,29 @@ describe("createLogger", () => {
     expect(text).toContain("kept");
   });
 
+  it("redacts form tokens, email addresses and upload URLs if one is ever logged", () => {
+    const sink = capture();
+    const log = createLogger({ logLevel: "info" }, sink.stream);
+    log.info(
+      {
+        csrfToken: "csrf-top",
+        authenticityToken: "auth-top",
+        email: "athlete@example.test",
+        uri: "https://up.example.test/key?X-Synthetic-Signature=sig-top",
+        form: { csrfToken: "csrf-in", authenticityToken: "auth-in", activityId: 7 },
+        target: {
+          uri: "https://up.example.test/key?X-Synthetic-Signature=sig-in",
+          email: "in@example.test",
+        },
+      },
+      "redaction",
+    );
+    const text = JSON.stringify(sink.lines());
+    for (const leaked of ["csrf-", "auth-top", "auth-in", "example.test", "sig-"])
+      expect(text).not.toContain(leaked);
+    expect(text).toContain('"activityId":7');
+  });
+
   it("respects the configured level", () => {
     const sink = capture();
     createLogger({ logLevel: "warn" }, sink.stream).info("dropped");

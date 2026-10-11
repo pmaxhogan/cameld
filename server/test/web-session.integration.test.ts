@@ -340,6 +340,91 @@ describe("edit form", () => {
   });
 });
 
+describe("diagnostic logging", () => {
+  it("logs every step of an edit and a photo attach without tokens, text or the signed query", async () => {
+    const session = open();
+    const form = await session.getEditForm(RUN_ID);
+    logLines.length = 0;
+    await session.setPrivateNote(RUN_ID, "synthetic secret note");
+    await session.attachPhoto(RUN_ID, {
+      bytes: SYNTHETIC_PNG,
+      contentType: "image/png",
+      takenAt: new Date("2030-04-01T06:05:00Z"),
+      athleteId: SYNTHETIC_ATHLETE_ID,
+    });
+    const lines = logLines.map((l) => JSON.parse(l) as Record<string, unknown>);
+    const said = (msg: string) => lines.filter((l) => l.msg === msg);
+    expect(said("web operation started")[0]).toMatchObject({
+      operation: "set_private_note",
+      activityId: RUN_ID,
+    });
+    expect(said("web operation finished").map((l) => l.operation)).toEqual([
+      "set_private_note",
+      "attach_photo",
+    ]);
+    expect(said("web operation finished")[0]?.seq).toBe(said("web operation started")[0]?.seq);
+    expect(said("edit form read")[0]).toMatchObject({
+      activityId: RUN_ID,
+      hydrated: true,
+      stable: true,
+      reads: 2,
+      settledLate: false,
+      moved: [],
+    });
+    expect(said("posting the edit form")[0]).toMatchObject({
+      method: "patch",
+      changed: ["activity[private_note]"],
+    });
+    expect(said("web request answered")[0]).toMatchObject({
+      method: "POST",
+      path: `/activities/${RUN_ID}`,
+      status: 200,
+      redirected: true,
+    });
+    expect(said("activity edited and verified")[0]).toMatchObject({ rereads: 0 });
+    expect(said("photo upload slot received")[0]).toMatchObject({
+      activityId: RUN_ID,
+      uploadHost: fake.uploadBaseUrl,
+      method: "PUT",
+      headerNames: ["Content-Type", "Host"],
+      size: SYNTHETIC_PNG.length,
+      fileContentType: "image/png",
+      sentContentType: SIGNED_CONTENT_TYPE,
+      status: 200,
+    });
+    expect(said("photo bytes uploaded")[0]).toMatchObject({ status: 200 });
+    const logged = logLines.join("");
+    for (const leak of [
+      form.csrfToken,
+      "synthetic secret note",
+      "synthetic note",
+      "Quillmere",
+      "Synthetic test activity",
+      "X-Synthetic-Signature",
+      "?",
+      "fake_strava_session",
+    ])
+      expect(logged).not.toContain(leak);
+  });
+
+  it("logs the login steps without the email address or the code", async () => {
+    fake.expireSessions();
+    logLines.length = 0;
+    const session = open({ email: SYNTHETIC_EMAIL, relay: relayFor(fake) });
+    await session.login();
+    const logged = logLines.join("");
+    for (const said of [
+      "automated login started",
+      "login code requested; waiting for the relay",
+      "login code entered",
+      "strava web login succeeded",
+    ])
+      expect(logged).toContain(said);
+    expect(logged).not.toContain(SYNTHETIC_EMAIL);
+    for (const mail of fake.mailbox) expect(logged).not.toContain(mail.code);
+  });
+});
+
 describe("verification after a save", () => {
   const editLoads = () =>
     fake.requests.filter((r) => r.method === "GET" && r.path === `/activities/${RIDE_ID}/edit`);
@@ -748,14 +833,19 @@ describe("photos", () => {
     const logged = logLines.join("");
     expect(logged).toContain('"uploadCode":"SignatureDoesNotMatch"');
     expect(logged).toContain('"status":403');
-    for (const leak of [
-      secret,
-      "upload-bucket",
-      "X-Synthetic-Signature",
-      "StringToSign",
-      "localhost",
-    ])
+    for (const leak of [secret, "X-Synthetic-Signature", "StringToSign", "?"])
       expect(logged).not.toContain(leak);
+    // The upload host and path are logged, without the query.
+    const refusal = logLines
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .find((l) => l.msg === "photo upload host refused the upload");
+    expect(refusal).toMatchObject({
+      method: "PUT",
+      host: fake.uploadBaseUrl,
+      status: 403,
+      uploadCode: "SignatureDoesNotMatch",
+    });
+    expect(refusal?.path).toMatch(/^\/upload-bucket\/[0-9a-f-]+$/);
 
     // Statuses that pause the gate when strava.com sends them do not here.
     for (const status of [401, 404, 429]) {

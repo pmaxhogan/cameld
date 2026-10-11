@@ -1,3 +1,5 @@
+import type { Logger } from "../logging.ts";
+
 /**
  * ZFS snapshots of the backup dataset (ARCHITECTURE.md section 7). The
  * service never holds a privileged container or the Docker socket; it asks a
@@ -38,6 +40,7 @@ export interface HttpSnapshotterOptions {
   fetch?: typeof fetch;
   /** Default 60000: a snapshot of a large dataset is still quick, but not instant. */
   timeoutMs?: number;
+  log?: Logger;
 }
 
 export class HttpSnapshotter implements Snapshotter {
@@ -45,8 +48,10 @@ export class HttpSnapshotter implements Snapshotter {
   readonly #token: string | undefined;
   readonly #fetch: typeof fetch;
   readonly #timeoutMs: number;
+  readonly #log: Logger | undefined;
 
   constructor(options: HttpSnapshotterOptions) {
+    this.#log = options.log?.child({ mod: "snapshot" });
     this.#url = `${options.url.replace(/\/+$/, "")}/snapshot`;
     this.#token = options.token;
     this.#fetch = options.fetch ?? fetch;
@@ -60,6 +65,7 @@ export class HttpSnapshotter implements Snapshotter {
       accept: "application/json",
     };
     if (this.#token !== undefined) headers.authorization = `Bearer ${this.#token}`;
+    const startedAt = Date.now();
     let response: Response;
     try {
       response = await this.#fetch(this.#url, {
@@ -69,17 +75,25 @@ export class HttpSnapshotter implements Snapshotter {
         signal: AbortSignal.timeout(this.#timeoutMs),
       });
     } catch (error) {
+      this.#log?.warn(
+        { err: error, label, ms: Date.now() - startedAt },
+        "snapshot helper unreachable",
+      );
       throw new SnapshotError(`snapshot helper unreachable: ${(error as Error).message}`);
     }
+    const ms = Date.now() - startedAt;
     if (!response.ok) {
       await response.body?.cancel();
+      this.#log?.warn({ label, status: response.status, ms }, "snapshot helper refused");
       throw new SnapshotError(`snapshot helper answered ${response.status}`);
     }
     const body = (await response.json().catch(() => null)) as { snapshot?: unknown } | null;
     const name = body?.snapshot;
     if (typeof name !== "string" || !/^[^@\s]+@[^@\s]+$/.test(name)) {
+      this.#log?.warn({ label, status: response.status, ms }, "snapshot helper sent no name");
       throw new SnapshotError("snapshot helper did not return a snapshot name");
     }
+    this.#log?.info({ label, snapshot: name, ms }, "snapshot taken");
     return name;
   }
 }

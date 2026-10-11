@@ -94,6 +94,46 @@ describe("path A (hide first)", () => {
     expect(listGroups(h.db)[0]?.status).toBe("hidden");
   });
 
+  it("logs the whole path without any free text, token or track data", async () => {
+    h = await acceptingHarness({ switches: { delete: true }, timing: { gracePeriodMs: HOUR } });
+    const outing = addOuting(h.world, { withPhoto: true });
+    await h.poller.poll();
+    h.clock.t += 2 * HOUR;
+    await h.machine.tick();
+    h.clock.t += 2 * HOUR;
+    await h.machine.tick();
+    const logged = h.logLines.join("");
+    // Every stage left lines behind.
+    for (const said of [
+      "strava api request",
+      "activity backed up",
+      "transition",
+      "strava upload settled",
+      "original hidden",
+      "photo re-attached",
+      "group waits",
+      "delete: permitted",
+      "delete: web delete answered",
+      "poll finished",
+    ])
+      expect(logged).toContain(said);
+    // None of the owner's text, the API token or a query string.
+    for (const leak of [
+      outing.app.name,
+      outing.fitbit.name,
+      "Synthetic loop around",
+      outing.app.privateNote,
+      outing.fitbit.privateNote,
+      "synthetic-token",
+      "Synthetic Friend",
+      "latlng",
+      "access_token",
+      "?",
+    ])
+      expect(logged).not.toContain(leak);
+    expect(listGroups(h.db)[0]?.status).toBe("done");
+  });
+
   it("flags a pair whose photos cannot be re-attached, without blocking the merge", async () => {
     h = await acceptingHarness();
     h.session.photoFails = true;

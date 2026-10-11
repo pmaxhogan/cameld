@@ -19,7 +19,7 @@ import type { StravaWebSession } from "../src/web/session.ts";
 import { type FakeStravaApi, startFakeStravaApi } from "./fake-strava-api/server.ts";
 import { FakeWebSession } from "./fake-strava-api/web-session.ts";
 import { FakeWorld } from "./fake-strava-api/world.ts";
-import { FakeSnapshotter, RecordingNotifier } from "./state-helpers.ts";
+import { captureLogger, FakeSnapshotter, RecordingNotifier } from "./state-helpers.ts";
 import { fakeClock } from "./strava-helpers.ts";
 
 /**
@@ -51,6 +51,8 @@ export interface Harness {
   budget: ReadBudget;
   metrics: Metrics;
   fault: Fault | null;
+  /** Every NDJSON log line of every service, at debug level. */
+  logLines: string[];
   /** Close the database and rebuild every service over it, as after a crash. */
   restart(extra?: Partial<MachineOptions>): void;
   close(): Promise<void>;
@@ -73,7 +75,18 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   const notifier = new RecordingNotifier();
   const snapshotter = new FakeSnapshotter();
   const session = new FakeWebSession(world, () => clock.now());
-  const h = { world, api, clock, dir, notifier, snapshotter, session, fault: null } as Harness;
+  const { log, lines: logLines } = captureLogger();
+  const h = {
+    world,
+    api,
+    clock,
+    dir,
+    notifier,
+    snapshotter,
+    session,
+    fault: null,
+    logLines,
+  } as Harness;
 
   const faultyFetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input));
@@ -115,9 +128,11 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
         options.webSession?.(clock) ?? (options.session === undefined ? session : options.session),
       notifier,
       metrics,
+      log,
       now: () => clock.now(),
     });
     const client = new StravaClient({
+      logger: log,
       tokens: { getAccessToken: () => Promise.resolve("synthetic-token") },
       limiter,
       fetch: faultyFetch as typeof fetch,
@@ -131,6 +146,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       root: join(dir, "backup"),
       now: () => clock.now(),
       metrics,
+      log: log.child({ mod: "backup" }),
       fetchPhoto: async (url) => {
         const response = await faultyFetch(url);
         return {
@@ -150,6 +166,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       settings,
       clock,
       metrics,
+      log,
       uploadPoll: { intervalMs: 1000, timeoutMs: 10_000 },
       ...options.machine,
       ...extra,
@@ -162,6 +179,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       settings,
       budget,
       clock,
+      log,
       reportPath: join(dir, "reports", "dry-run.json"),
     });
     ref.backup = backup;
@@ -176,6 +194,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       clock,
       limiter,
       metrics,
+      log,
     });
     Object.assign(h, {
       db,

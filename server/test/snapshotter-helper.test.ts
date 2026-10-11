@@ -2,6 +2,9 @@ import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { HttpSnapshotter, SnapshotError } from "../src/service/snapshotter.ts";
+import { captureLogger } from "./state-helpers.ts";
+
+const { log } = captureLogger();
 
 /**
  * A stand-in for deploy/snapshot-helper/: a real HTTP server on loopback that
@@ -64,7 +67,7 @@ afterEach(async () => {
 describe("HttpSnapshotter against a helper over real HTTP", () => {
   it("sends the bearer token and returns the helper's snapshot name", async () => {
     const helper = await startHelper(helperLike);
-    const snap = new HttpSnapshotter({ url: `${helper.url}/`, token: TOKEN });
+    const snap = new HttpSnapshotter({ log, url: `${helper.url}/`, token: TOKEN });
     expect(await snap.snapshot("pre-delete-7")).toBe(
       `${DATASET}@cameld-pre-delete-7-20300101T000000Z`,
     );
@@ -76,24 +79,24 @@ describe("HttpSnapshotter against a helper over real HTTP", () => {
 
   it("fails closed when the helper rejects a missing or wrong token", async () => {
     const helper = await startHelper(helperLike);
-    const without = new HttpSnapshotter({ url: helper.url });
+    const without = new HttpSnapshotter({ log, url: helper.url });
     await expect(without.snapshot("pre-delete-1")).rejects.toThrow(SnapshotError);
     expect(helper.seen[0]?.headers.authorization).toBeUndefined();
 
-    const wrong = new HttpSnapshotter({ url: helper.url, token: "not-the-key" });
+    const wrong = new HttpSnapshotter({ log, url: helper.url, token: "not-the-key" });
     await expect(wrong.snapshot("pre-delete-1")).rejects.toThrow("snapshot helper answered 401");
   });
 
   it("never contacts the helper for a label it would reject", async () => {
     const helper = await startHelper(helperLike);
-    const snap = new HttpSnapshotter({ url: helper.url, token: TOKEN });
+    const snap = new HttpSnapshotter({ log, url: helper.url, token: TOKEN });
     await expect(snap.snapshot("../x@y")).rejects.toThrow(SnapshotError);
     expect(helper.seen).toHaveLength(0);
   });
 
   it("rejects a 200 whose body is not a single dataset@name", async () => {
     const helper = await startHelper(() => ({ status: 200, body: '{"snapshot": "a@b@c"}' }));
-    const snap = new HttpSnapshotter({ url: helper.url, token: TOKEN });
+    const snap = new HttpSnapshotter({ log, url: helper.url, token: TOKEN });
     await expect(snap.snapshot("pre-delete-2")).rejects.toThrow(
       "snapshot helper did not return a snapshot name",
     );

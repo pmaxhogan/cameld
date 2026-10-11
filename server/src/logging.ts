@@ -21,6 +21,15 @@ export const REDACT_PATHS = [
   "*.secret",
   "*.access_token",
   "*.refresh_token",
+  // Defence in depth: nothing logs these on purpose.
+  "csrfToken",
+  "authenticityToken",
+  "email",
+  "uri",
+  "*.csrfToken",
+  "*.authenticityToken",
+  "*.email",
+  "*.uri",
 ];
 
 /**

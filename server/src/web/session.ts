@@ -261,6 +261,7 @@ export class WebSession implements StravaWebSession {
   #lastRemediationAt: number | null = null;
   #queue: Promise<unknown> = Promise.resolve();
   #loginAttempted = false;
+  #sequence = 0;
 
   constructor(options: WebSessionOptions) {
     this.#options = options;
@@ -286,6 +287,7 @@ export class WebSession implements StravaWebSession {
       try {
         await this.#navigate(page, "/dashboard");
         const menu = await page.locator(this.#menuSelector).count();
+        this.#log?.debug({ athleteMenus: menu }, "dashboard loaded for the health check");
         if (menu === 0) return this.#health("athlete_menu_missing");
         this.#loginAttempted = false;
         return this.#health(null);
@@ -326,13 +328,21 @@ export class WebSession implements StravaWebSession {
    */
   login(): Promise<void> {
     const { relay, email } = this.#options;
-    if (relay === undefined || email === undefined)
-      return Promise.reject(new LoginRequiredError("automated login is not configured"));
-    if (this.#loginAttempted)
+    if (relay === undefined || email === undefined || this.#loginAttempted) {
+      const reason =
+        relay === undefined || email === undefined ? "not_configured" : "already_failed";
+      this.#log?.info({ reason }, "automated login not attempted");
       return Promise.reject(
-        new LoginRequiredError("automated login already failed; the owner must log in"),
+        new LoginRequiredError(
+          reason === "not_configured"
+            ? "automated login is not configured"
+            : "automated login already failed; the owner must log in",
+        ),
       );
+    }
     this.#loginAttempted = true;
+    // Steps are logged without the email address or the code.
+    this.#log?.info("automated login started");
     const budget = this.#codeTimeoutMs + 4 * this.#navigationTimeoutMs;
     return this.#run("login", budget, async (page) => {
       const response = await page.goto(`${this.#baseUrl}/login`, { waitUntil: "load" });
@@ -340,8 +350,10 @@ export class WebSession implements StravaWebSession {
         // Already logged in (the profile still had a session).
         await this.#assertLoggedIn(page);
         this.#loginAttempted = false;
+        this.#log?.info("login page redirected: the profile is still logged in");
         return;
       }
+      this.#log?.debug({ status: response?.status() ?? null }, "login page loaded");
       if (looksLikeChallenge(await page.content()) || response?.status() === 403)
         throw new LoginRequiredError("strava.com challenged the login page");
 
@@ -358,6 +370,7 @@ export class WebSession implements StravaWebSession {
         this.#log?.warn({ status: otp.status() }, "strava refused request_otp");
         throw new LoginRequiredError(`strava.com refused request_otp with ${otp.status()}`);
       }
+      this.#log?.info({ status: otp.status() }, "login code requested; waiting for the relay");
 
       let code: string;
       try {
@@ -378,6 +391,7 @@ export class WebSession implements StravaWebSession {
         .locator('input[autocomplete="one-time-code"], input[name="otp"], input[name="code"]')
         .first();
       await codeInput.fill(code);
+      this.#log?.debug({ waitedMs: this.#clock.now() - since }, "login code entered");
       await Promise.all([
         page.waitForURL((url) => !isLoginPath(url.pathname), {
           timeout: this.#navigationTimeoutMs,
@@ -411,33 +425,41 @@ export class WebSession implements StravaWebSession {
   async #export(activityId: number, action: string, extension: string): Promise<ExportedFile> {
     assertId(activityId);
     const path = `/activities/${activityId}/${action}`;
-    return this.#run(action, this.#operationTimeoutMs, async (page) => {
-      await this.#navigate(page, this.#landingPath);
-      const response = await this.#fetch(page, "GET", path, { kind: "none" });
-      const contentType = response.headers["content-type"] ?? "application/octet-stream";
-      if (contentType.startsWith("text/html") || response.bytes.length === 0) {
-        throw new WebNoFileError(path, {
-          status: response.status,
-          contentType: response.headers["content-type"] ?? "",
-          finalPath: new URL(response.url).pathname,
-          redirected: response.redirected,
-          size: response.bytes.length,
-        });
-      }
-      const filename =
-        parseContentDisposition(response.headers["content-disposition"]) ??
-        `${activityId}.${extension}`;
-      this.#log?.info({ activityId, action, size: response.bytes.length }, "exported file");
-      return { bytes: response.bytes, filename, contentType };
-    });
+    return this.#run(
+      action,
+      this.#operationTimeoutMs,
+      async (page) => {
+        await this.#navigate(page, this.#landingPath);
+        const response = await this.#fetch(page, "GET", path, { kind: "none" });
+        const contentType = response.headers["content-type"] ?? "application/octet-stream";
+        if (contentType.startsWith("text/html") || response.bytes.length === 0) {
+          throw new WebNoFileError(path, {
+            status: response.status,
+            contentType: response.headers["content-type"] ?? "",
+            finalPath: new URL(response.url).pathname,
+            redirected: response.redirected,
+            size: response.bytes.length,
+          });
+        }
+        const filename =
+          parseContentDisposition(response.headers["content-disposition"]) ??
+          `${activityId}.${extension}`;
+        this.#log?.info({ activityId, action, size: response.bytes.length }, "exported file");
+        return { bytes: response.bytes, filename, contentType };
+      },
+      activityId,
+    );
   }
 
   // ------------------------------------------------------------------ edit
 
   async getEditForm(activityId: number): Promise<EditForm> {
     assertId(activityId);
-    return this.#run("get_edit_form", this.#operationTimeoutMs, (page) =>
-      this.#readForm(page, activityId),
+    return this.#run(
+      "get_edit_form",
+      this.#operationTimeoutMs,
+      (page) => this.#readForm(page, activityId),
+      activityId,
     );
   }
 
@@ -482,49 +504,54 @@ export class WebSession implements StravaWebSession {
     changes: FormEntries,
   ): Promise<EditFormValues> {
     assertId(activityId);
-    return this.#run(operation, this.#operationTimeoutMs, async (page) => {
-      const before = await this.#readForm(page, activityId);
-      await this.#submit(page, before, "patch", changes);
-      const expected = new Map(changes);
-      const disagreement = (after: EditForm): FieldChange[] => {
-        const wrong = changedFields(before.entries, after.entries).filter(
-          (name) => !expected.has(name),
-        );
-        for (const [name, value] of changes) {
-          if (normalizeText(lastValue(after.entries, name) ?? "") !== normalizeText(value))
-            wrong.push(name);
+    return this.#run(
+      operation,
+      this.#operationTimeoutMs,
+      async (page) => {
+        const before = await this.#readForm(page, activityId);
+        await this.#submit(page, before, "patch", changes);
+        const expected = new Map(changes);
+        const disagreement = (after: EditForm): FieldChange[] => {
+          const wrong = changedFields(before.entries, after.entries).filter(
+            (name) => !expected.has(name),
+          );
+          for (const [name, value] of changes) {
+            if (normalizeText(lastValue(after.entries, name) ?? "") !== normalizeText(value))
+              wrong.push(name);
+          }
+          const controlled = [...before.controlled, ...after.controlled];
+          return describeChanges(wrong, before.entries, after.entries, controlled);
+        };
+        let after = await this.#readForm(page, activityId);
+        let wrong = disagreement(after);
+        const first = wrong;
+        let rereads = 0;
+        for (const delay of this.#verifySettleDelaysMs) {
+          if (wrong.length === 0) break;
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          after = await this.#readForm(page, activityId);
+          wrong = disagreement(after);
+          rereads += 1;
         }
-        const controlled = [...before.controlled, ...after.controlled];
-        return describeChanges(wrong, before.entries, after.entries, controlled);
-      };
-      let after = await this.#readForm(page, activityId);
-      let wrong = disagreement(after);
-      const first = wrong;
-      let rereads = 0;
-      for (const delay of this.#verifySettleDelaysMs) {
-        if (wrong.length === 0) break;
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        after = await this.#readForm(page, activityId);
-        wrong = disagreement(after);
-        rereads += 1;
-      }
-      if (wrong.length > 0)
-        throw new WebVerificationError(
-          activityId,
-          wrong.map((change) => change.field),
-          wrong,
+        if (wrong.length > 0)
+          throw new WebVerificationError(
+            activityId,
+            wrong.map((change) => change.field),
+            wrong,
+          );
+        if (rereads > 0)
+          this.#log?.warn(
+            { activityId, operation, rereads, fields: first.map((c) => c.field), changes: first },
+            "re-read form disagreed right after the save and agreed on a later read",
+          );
+        this.#log?.info(
+          { activityId, operation, fields: changes.map(([name]) => name), rereads },
+          "activity edited and verified",
         );
-      if (rereads > 0)
-        this.#log?.warn(
-          { activityId, operation, rereads, fields: first.map((c) => c.field), changes: first },
-          "re-read form disagreed right after the save and agreed on a later read",
-        );
-      this.#log?.info(
-        { activityId, operation, fields: changes.map(([name]) => name) },
-        "activity edited",
-      );
-      return after.values;
-    });
+        return after.values;
+      },
+      activityId,
+    );
   }
 
   /**
@@ -553,6 +580,7 @@ export class WebSession implements StravaWebSession {
     let snapshot = await page.evaluate(readActivityForm, activityPath);
     let stable = false;
     let moving: string[] = [];
+    let reads = 1;
     for (
       let waited = 0;
       hydrated && snapshot !== null && !stable && waited < this.#formHydrationTimeoutMs;
@@ -560,6 +588,7 @@ export class WebSession implements StravaWebSession {
     ) {
       await new Promise((resolve) => setTimeout(resolve, this.#formStableIntervalMs));
       const next = await page.evaluate(readActivityForm, activityPath);
+      reads += 1;
       if (next !== null) {
         stable = sameEntries(snapshot.entries, next.entries);
         moving = changedFields(snapshot.entries, next.entries);
@@ -568,6 +597,21 @@ export class WebSession implements StravaWebSession {
     }
     if (snapshot === null) throw new WebUnexpectedResponseError(`${path} has no activity form`);
     const missing = missingRequiredFields(snapshot.entries);
+    // Field NAMES and counts only; values can be the owner's text.
+    this.#log?.debug(
+      {
+        activityId,
+        entries: snapshot.entries.length,
+        hydrated,
+        stable,
+        reads,
+        // More than two reads means the form was still changing after hydration.
+        settledLate: reads > 2,
+        moved: moving,
+        missing,
+      },
+      "edit form read",
+    );
     if (!hydrated || missing.length > 0)
       throw new WebNotReadyError(
         path,
@@ -602,6 +646,15 @@ export class WebSession implements StravaWebSession {
     const path = `/activities/${form.activityId}`;
     const entries = buildSubmission(form.entries, form.authenticityToken, method, changes);
     assertSubmittable(path, entries);
+    this.#log?.debug(
+      {
+        activityId: form.activityId,
+        method,
+        entries: entries.length,
+        changed: changes.map(([name]) => name),
+      },
+      "posting the edit form",
+    );
     return this.#fetch(
       page,
       "POST",
@@ -630,37 +683,47 @@ export class WebSession implements StravaWebSession {
   ): Promise<DeletionResult> {
     assertId(activityId);
     DeletionAuthorization.consume(authorization, activityId, this.#clock.now());
-    return this.#run("delete_activity", this.#operationTimeoutMs, async (page) => {
-      const form = await this.#readForm(page, activityId);
-      this.#log?.warn(
-        { activityId, reason: authorization.reason, snapshot: authorization.snapshot },
-        "deleting strava activity",
-      );
-      const path = `/activities/${activityId}`;
-      let check: Fetched;
-      try {
-        await this.#submit(page, form, "delete", [], true);
-        check = await this.#fetch(page, "GET", path, { kind: "none" }, {}, true);
-      } catch (error) {
-        // Expired or challenged once the delete was sent (its own redirect or
-        // the check): the outcome is UNKNOWN. Never report it as confirmed.
-        if (error instanceof LoginRequiredError)
-          throw new LoginRequiredError(
-            `delete of activity ${activityId} sent but unconfirmed: login required`,
-            { cause: error },
-          );
-        if (error instanceof ChallengeError)
-          throw new ChallengeError(
-            error.kind,
-            `delete of activity ${activityId} sent but unconfirmed: ${error.message}`,
-          );
-        throw error;
-      }
-      if (!deletionConfirmed(check.status, new URL(check.url).pathname))
-        throw new DeletionNotConfirmedError(activityId);
-      this.#log?.warn({ activityId }, "strava activity deleted");
-      return { activityId, confirmedAt: this.#clock.now() };
-    });
+    return this.#run(
+      "delete_activity",
+      this.#operationTimeoutMs,
+      async (page) => {
+        const form = await this.#readForm(page, activityId);
+        this.#log?.warn(
+          { activityId, reason: authorization.reason, snapshot: authorization.snapshot },
+          "deleting strava activity",
+        );
+        const path = `/activities/${activityId}`;
+        let check: Fetched;
+        try {
+          await this.#submit(page, form, "delete", [], true);
+          check = await this.#fetch(page, "GET", path, { kind: "none" }, {}, true);
+        } catch (error) {
+          // Expired or challenged once the delete was sent (its own redirect or
+          // the check): the outcome is UNKNOWN. Never report it as confirmed.
+          if (error instanceof LoginRequiredError)
+            throw new LoginRequiredError(
+              `delete of activity ${activityId} sent but unconfirmed: login required`,
+              { cause: error },
+            );
+          if (error instanceof ChallengeError)
+            throw new ChallengeError(
+              error.kind,
+              `delete of activity ${activityId} sent but unconfirmed: ${error.message}`,
+            );
+          throw error;
+        }
+        const finalPath = new URL(check.url).pathname;
+        this.#log?.debug(
+          { activityId, status: check.status, finalPath, redirected: check.redirected },
+          "delete check answered",
+        );
+        if (!deletionConfirmed(check.status, finalPath))
+          throw new DeletionNotConfirmedError(activityId);
+        this.#log?.warn({ activityId }, "strava activity deleted");
+        return { activityId, confirmedAt: this.#clock.now() };
+      },
+      activityId,
+    );
   }
 
   // ---------------------------------------------------------------- photos
@@ -697,50 +760,71 @@ export class WebSession implements StravaWebSession {
     assertId(activityId);
     assertId(photo.athleteId, "athlete id");
     if (Number.isNaN(photo.takenAt.getTime())) throw new RangeError("takenAt is not a date");
-    return this.#run("attach_photo", this.#operationTimeoutMs, async (page) => {
-      const form = await this.#readForm(page, activityId);
-      const uuid = randomUUID();
-      const meta = await this.#fetch(
-        page,
-        "PUT",
-        "/photos/metadata",
-        {
-          kind: "json",
-          text: JSON.stringify({
-            athlete_id: photo.athleteId,
-            uuid,
-            taken_at: photo.takenAt.toISOString(),
-            media_type: 1,
-            location: null,
-          }),
-        },
-        {
-          "content-type": "application/json",
-          accept: "application/json",
-          "x-csrf-token": form.csrfToken,
-        },
-      );
-      const target = parseUploadTarget(meta.bytes);
-      await this.#fetch(
-        page,
-        "PUT",
-        target.uri,
-        { kind: "bytes", base64: photo.bytes.toString("base64") },
-        uploadHeaders(photo.contentType, target.header),
-        false,
-        "omit",
-      );
-      const rank = photoIds(form.entries).length + 1;
-      await this.#submit(page, form, "patch", [
-        [`photos[${uuid}][rank]`, String(rank)],
-        [`photos[${uuid}][media_type]`, "1"],
-        [`photos[${uuid}][caption]`, ""],
-      ]);
-      const after = await this.#readForm(page, activityId);
-      const verified = photoIds(after.entries).includes(uuid);
-      this.#log?.info({ activityId, verified }, "photo attached");
-      return { uuid, verified };
-    });
+    return this.#run(
+      "attach_photo",
+      this.#operationTimeoutMs,
+      async (page) => {
+        const form = await this.#readForm(page, activityId);
+        const uuid = randomUUID();
+        const meta = await this.#fetch(
+          page,
+          "PUT",
+          "/photos/metadata",
+          {
+            kind: "json",
+            text: JSON.stringify({
+              athlete_id: photo.athleteId,
+              uuid,
+              taken_at: photo.takenAt.toISOString(),
+              media_type: 1,
+              location: null,
+            }),
+          },
+          {
+            "content-type": "application/json",
+            accept: "application/json",
+            "x-csrf-token": form.csrfToken,
+          },
+        );
+        const target = parseUploadTarget(meta.bytes);
+        const headers = uploadHeaders(photo.contentType, target.header);
+        const slot = new URL(target.uri, this.#baseUrl);
+        // Origin and path of the presigned URL only: its query is the signature.
+        // Header NAMES only.
+        const upload = {
+          activityId,
+          uploadHost: slot.origin,
+          uploadPath: slot.pathname,
+          method: "PUT",
+          headerNames: Object.keys(target.header),
+          size: photo.bytes.length,
+          fileContentType: photo.contentType,
+          sentContentType: headers["content-type"],
+        };
+        this.#log?.debug({ ...upload, status: meta.status }, "photo upload slot received");
+        const sent = await this.#fetch(
+          page,
+          "PUT",
+          target.uri,
+          { kind: "bytes", base64: photo.bytes.toString("base64") },
+          headers,
+          false,
+          "omit",
+        );
+        this.#log?.debug({ ...upload, status: sent.status }, "photo bytes uploaded");
+        const rank = photoIds(form.entries).length + 1;
+        await this.#submit(page, form, "patch", [
+          [`photos[${uuid}][rank]`, String(rank)],
+          [`photos[${uuid}][media_type]`, "1"],
+          [`photos[${uuid}][caption]`, ""],
+        ]);
+        const after = await this.#readForm(page, activityId);
+        const verified = photoIds(after.entries).includes(uuid);
+        this.#log?.info({ activityId, verified, size: photo.bytes.length }, "photo attached");
+        return { uuid, verified };
+      },
+      activityId,
+    );
   }
 
   // ------------------------------------------------------------ plumbing
@@ -757,8 +841,16 @@ export class WebSession implements StravaWebSession {
   }
 
   /** Serialize: each operation starts after the previous one settled. */
-  #run<T>(operation: string, timeoutMs: number, work: (page: Page) => Promise<T>): Promise<T> {
-    const result = this.#queue.then(() => this.#execute(operation, timeoutMs, work));
+  #run<T>(
+    operation: string,
+    timeoutMs: number,
+    work: (page: Page) => Promise<T>,
+    activityId?: number,
+  ): Promise<T> {
+    const queuedAt = Date.now();
+    const result = this.#queue.then(() =>
+      this.#execute(operation, timeoutMs, work, activityId, queuedAt),
+    );
     this.#queue = result.catch(() => undefined);
     return result;
   }
@@ -767,7 +859,19 @@ export class WebSession implements StravaWebSession {
     operation: string,
     timeoutMs: number,
     work: (page: Page) => Promise<T>,
+    activityId: number | undefined,
+    queuedAt: number,
   ): Promise<T> {
+    // `seq` numbers the operations of this process, so the lines of one
+    // operation (and a caller's retry, which is a new operation) can be told apart.
+    this.#sequence += 1;
+    const startedAt = Date.now();
+    const context = {
+      operation,
+      seq: this.#sequence,
+      ...(activityId === undefined ? {} : { activityId }),
+    };
+    this.#log?.debug({ ...context, queuedMs: startedAt - queuedAt }, "web operation started");
     const deadline = timeoutAfter(timeoutMs, () => new WebTimeoutError(operation, timeoutMs));
     const state: { page: Page | null; settled: boolean } = { page: null, settled: false };
     try {
@@ -783,10 +887,14 @@ export class WebSession implements StravaWebSession {
         page.setDefaultTimeout(this.#navigationTimeoutMs);
         return work(page);
       })();
-      return await Promise.race([opened, deadline.promise]);
+      const result = await Promise.race([opened, deadline.promise]);
+      this.#log?.info({ ...context, ms: Date.now() - startedAt }, "web operation finished");
+      return result;
     } catch (error) {
+      const ms = Date.now() - startedAt;
       if (error instanceof WebSessionError)
-        this.#log?.warn({ operation, code: error.code, err: error }, "web operation failed");
+        this.#log?.warn({ ...context, ms, code: error.code, err: error }, "web operation failed");
+      else this.#log?.error({ ...context, ms, err: error }, "web operation threw");
       throw error;
     } finally {
       state.settled = true;
@@ -902,9 +1010,14 @@ export class WebSession implements StravaWebSession {
   }
 
   async #navigate(page: Page, path: string): Promise<void> {
+    const startedAt = Date.now();
     const response = await page.goto(`${this.#baseUrl}${path}`, { waitUntil: "domcontentloaded" });
     const status = response === null ? 200 : response.status();
     const html = await page.content();
+    this.#log?.debug(
+      { path, status, finalPath: new URL(page.url()).pathname, ms: Date.now() - startedAt },
+      "page loaded",
+    );
     const error = classify({ status, url: page.url(), html }, { path });
     if (error !== null) throw error;
   }
@@ -919,6 +1032,7 @@ export class WebSession implements StravaWebSession {
     credentials: "include" | "omit" = "include",
   ): Promise<Fetched> {
     const url = new URL(target, this.#baseUrl).toString();
+    const startedAt = Date.now();
     const response = await page.evaluate(inPageFetch, {
       url,
       method,
@@ -927,15 +1041,29 @@ export class WebSession implements StravaWebSession {
       credentials,
     });
     const bytes = Buffer.from(response.bodyBase64, "base64");
+    const requested = new URL(url);
+    const foreign = requested.origin !== new URL(this.#baseUrl).origin;
+    // Path only, never the query (a presigned URL's query is its signature);
+    // never headers or bodies.
+    const seen = {
+      method,
+      ...(foreign ? { host: requested.origin } : {}),
+      path: requested.pathname,
+      status: response.status,
+      redirected: response.redirected,
+      size: bytes.length,
+      ms: Date.now() - startedAt,
+    };
+    this.#log?.debug(seen, "web request answered");
     // Only strava.com's own answers can mean "logged out" or "challenged".
     // Any other host is the presigned photo upload target.
-    if (new URL(url).origin !== new URL(this.#baseUrl).origin) {
+    if (foreign) {
       const text = bytes.toString("utf8");
       const refused = classifyUpload(response.status, text);
       if (refused !== null) {
-        // The error code only: never the body, the headers or the URL.
+        // The error code only: never the body, the headers or the query.
         this.#log?.warn(
-          { status: response.status, uploadCode: uploadErrorCode(text) },
+          { ...seen, uploadCode: uploadErrorCode(text) },
           "photo upload host refused the upload",
         );
         throw refused;

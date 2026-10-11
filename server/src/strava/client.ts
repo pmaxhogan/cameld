@@ -114,9 +114,11 @@ export class StravaClient {
   readonly #fetch: typeof fetch;
   readonly #base: string;
   readonly #clock: Clock;
+  readonly #log: Logger | undefined;
 
   constructor(options: StravaClientOptions) {
     this.#opts = options;
+    this.#log = options.logger?.child({ mod: "strava-api" });
     this.#fetch = options.fetch ?? fetch;
     this.#base = options.baseUrl ?? DEFAULT_BASE_URL;
     this.#clock = options.clock ?? systemClock;
@@ -137,6 +139,7 @@ export class StravaClient {
     const retries = this.#opts.maxRateLimitRetries ?? 1;
     for (let attempt = 0; ; attempt += 1) {
       await this.#opts.limiter.acquire(kind);
+      const startedAt = this.#clock.now();
       const token = await this.#opts.tokens.getAccessToken();
       const headers: Record<string, string> = {
         authorization: `Bearer ${token}`,
@@ -145,9 +148,18 @@ export class StravaClient {
       if (init.contentType !== undefined) headers["content-type"] = init.contentType;
       const response = await this.#fetch(url, { method, headers, body: init.body ?? null });
       this.#opts.limiter.update(response.headers);
+      // The path holds ids only; the query string and the body are never logged.
+      const seen = {
+        method,
+        path,
+        status: response.status,
+        ms: this.#clock.now() - startedAt,
+        attempt,
+        usage: this.#opts.limiter.usage(),
+      };
       if (response.status === 429) {
         this.#opts.limiter.markRateLimited(kind);
-        this.#opts.logger?.warn({ path }, "strava rate limit hit");
+        this.#log?.warn({ ...seen, retrying: attempt < retries }, "strava rate limit hit");
         await response.body?.cancel();
         if (attempt < retries) continue;
         throw new StravaRateLimitedError(429, path, "rate limit exceeded");
@@ -157,8 +169,10 @@ export class StravaClient {
           (text) => text.slice(0, 300),
           () => "",
         );
+        this.#log?.debug(seen, "strava api request refused");
         throw new StravaApiError(response.status, path, detail);
       }
+      this.#log?.debug(seen, "strava api request");
       return (await response.json()) as T;
     }
   }
@@ -231,10 +245,29 @@ export class StravaClient {
     const timeout = options.timeoutMs ?? 120_000;
     const deadline = this.#clock.now() + timeout;
     let upload = initial;
-    for (;;) {
+    for (let polls = 0; ; polls += 1) {
       const done = classifyUpload(upload);
-      if (done !== null) return done;
-      if (this.#clock.now() + interval > deadline) throw new UploadTimeoutError(upload.id);
+      if (done !== null) {
+        // Never the error text: a duplicate refusal quotes the other activity's name.
+        this.#log?.info(
+          {
+            uploadId: done.uploadId,
+            outcome: done.kind,
+            polls,
+            ...(done.kind === "ready" ? { activityId: done.activityId } : {}),
+            ...(done.kind === "duplicate" ? { duplicateOf: done.duplicateOf } : {}),
+          },
+          "strava upload settled",
+        );
+        return done;
+      }
+      if (this.#clock.now() + interval > deadline) {
+        this.#log?.warn(
+          { uploadId: upload.id, polls, timeoutMs: timeout },
+          "strava upload timed out",
+        );
+        throw new UploadTimeoutError(upload.id);
+      }
       await this.#clock.sleep(interval);
       upload = await this.getUpload(upload.id);
     }
