@@ -1,17 +1,50 @@
 import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CheckFailedError, isTransient } from "../src/state/machine.ts";
 import { groupEvents, listGroups, requireGroup, writesFor } from "../src/state/repo.ts";
 import { StravaApiError } from "../src/strava/client.ts";
 import { DeletionAuthorization } from "../src/web/deletion-authorization.ts";
+import { LoginRequiredError } from "../src/web/errors.ts";
 import { addOuting } from "./fixtures/synthetic-outings.ts";
 import { createHarness, type Harness } from "./machine-harness.ts";
 
 let h: Harness;
 afterEach(async () => {
+  vi.restoreAllMocks();
   await h?.close();
 });
+
+/** Records the pre-delete work of `#guardedDelete` in the order it happens. */
+function recordDeleteSteps(harness: Harness): string[] {
+  const steps: string[] = [];
+  const backupActivity = harness.backup.backupActivity.bind(harness.backup);
+  harness.backup.backupActivity = (id, options) => {
+    if (options?.fresh === true) steps.push(`backup:${id}`);
+    return backupActivity(id, options);
+  };
+  const readOriginal = harness.backup.readOriginal.bind(harness.backup);
+  harness.backup.readOriginal = (id) => {
+    steps.push(`read_original:${id}`);
+    return readOriginal(id);
+  };
+  const snapshot = harness.snapshotter.snapshot.bind(harness.snapshotter);
+  harness.snapshotter.snapshot = (label) => {
+    if (label.startsWith("pre-delete-")) steps.push(`snapshot:${label.slice(11)}`);
+    return snapshot(label);
+  };
+  const mint = DeletionAuthorization.mint.bind(DeletionAuthorization);
+  vi.spyOn(DeletionAuthorization, "mint").mockImplementation((evidence, now) => {
+    steps.push(`authorize:${evidence.activityId}`);
+    return mint(evidence, now);
+  });
+  const deleteActivity = harness.session.deleteActivity.bind(harness.session);
+  harness.session.deleteActivity = (id, auth) => {
+    steps.push(`delete:${id}`);
+    return deleteActivity(id, auth);
+  };
+  return steps;
+}
 
 describe("deletion guards", () => {
   it("parks instead of deleting while the deletion switch is off", async () => {
@@ -71,14 +104,75 @@ describe("deletion guards", () => {
     expect(h.notifier.kinds()).toContain("login_unhealthy");
     await h.machine.tick();
     expect(listGroups(h.db)[0]?.status).toBe("b_delete_fitbit");
-    expect(listGroups(h.db)[0]?.lastError).toMatch(/WebPausedError/);
-    expect(writesFor(h.db, { kind: "delete" })).toEqual([
-      { ...writesFor(h.db, { kind: "delete" })[0], status: "failed" },
-    ]);
+    expect(listGroups(h.db)[0]?.lastError).toBe("wait:web_paused");
+    expect(writesFor(h.db, { kind: "delete" })).toEqual([]);
     h.session.loggedIn = true;
     await h.web.keepAlive();
     await h.machine.tick();
     expect(listGroups(h.db)[0]?.status).toBe("done");
+  });
+
+  it("does no pre-delete work for a delete it cannot send while the web session is paused", async () => {
+    h = await createHarness({ settings: { switches: { upload: false, delete: true } } });
+    const outing = addOuting(h.world);
+    await h.poller.poll();
+    h.session.loggedIn = false;
+    await h.web.keepAlive();
+    expect(h.web.available()).toBe(false);
+    const steps = recordDeleteSteps(h);
+    const snapshots = h.snapshotter.taken.length;
+    const files = () =>
+      (h.db.prepare("SELECT COUNT(*) AS n FROM backup_files").get() as { n: number }).n;
+    const backedUp = files();
+    h.settings.update({ switches: { upload: true } });
+    for (let tick = 0; tick < 5; tick += 1) await h.machine.tick();
+    const group = listGroups(h.db)[0]!;
+    expect(group.status).toBe("b_delete_fitbit");
+    expect(group.lastError).toBe("wait:web_paused");
+    expect(groupEvents(h.db, group.id).filter((e) => e.event === "wait:web_paused")).toHaveLength(
+      1,
+    );
+    // No fresh backup, no read-back, no snapshot, no authorization, no delete.
+    expect(steps).toEqual([]);
+    expect(h.snapshotter.taken).toHaveLength(snapshots);
+    expect(files()).toBe(backedUp);
+    expect(writesFor(h.db, { kind: "delete" })).toEqual([]);
+    expect(h.session.calls.some((c) => c.op === "delete")).toBe(false);
+    expect(h.freeze.isFrozen()).toBe(false);
+    // Healthy again: every safety step runs, in the same order as ever, per member.
+    h.session.loggedIn = true;
+    await h.web.keepAlive();
+    await h.machine.tick();
+    const a = outing.fitbit.id;
+    const b = outing.app.id;
+    expect(steps).toEqual(
+      [a, b].flatMap((id) => [
+        `backup:${id}`,
+        `read_original:${id}`,
+        `snapshot:${id}`,
+        `authorize:${id}`,
+        `delete:${id}`,
+      ]),
+    );
+    expect(h.snapshotter.taken).toHaveLength(snapshots + 2);
+    expect(requireGroup(h.db, group.id).status).toBe("done");
+  });
+
+  it("still journals a delete as not sent when the session pauses after the pre-delete work", async () => {
+    h = await createHarness({ settings: { switches: { delete: true } } });
+    addOuting(h.world);
+    // The gate is open when the delete step starts and closes during the snapshot.
+    h.snapshotter.onSnapshot = () => {
+      if (h.snapshotter.taken.length >= 1)
+        void h.web.run(() => Promise.reject(new LoginRequiredError("x"))).catch(() => undefined);
+    };
+    await h.poller.poll();
+    expect(listGroups(h.db)[0]?.status).toBe("b_delete_fitbit");
+    expect(listGroups(h.db)[0]?.lastError).toMatch(/WebPausedError/);
+    expect(writesFor(h.db, { kind: "delete" })).toMatchObject([
+      { status: "failed", result: { notSent: true } },
+    ]);
+    expect(h.session.calls.some((c) => c.op === "delete")).toBe(false);
   });
 
   it("waits out the confirmation window, then freezes when the API never confirms a web delete", async () => {

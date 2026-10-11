@@ -1322,6 +1322,10 @@ export class MergeMachine {
     this.#assertWritable();
     const permit = this.#permit(group);
     if (permit === null) throw new Wait("deletion_switch_off");
+    // A delete that cannot be sent (web session paused, or no browser) gets no
+    // pre-delete backup, snapshot or authorization: they would be redone, and
+    // one more snapshot kept, on every tick until the session is healthy.
+    if (!this.#web.available()) throw new Wait("web_paused");
     if (permit === "trial" && !requireGroup(this.#db, group.id).trial) {
       patchGroup(this.#db, group.id, { trial: true }, this.#now());
     }

@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import { createLogger } from "../src/logging.ts";
 import { type RelayClient, RelayTimeoutError } from "../src/relay/client.ts";
+import { WebGate } from "../src/service/web-gate.ts";
 import { DeletionAuthorization } from "../src/web/deletion-authorization.ts";
 import {
   BrowserUnavailableError,
@@ -30,6 +31,7 @@ import {
   syntheticActivities,
 } from "./fake-strava/fixtures.ts";
 import { type FakeStrava, startFakeStrava } from "./fake-strava/server.ts";
+import { RecordingNotifier } from "./state-helpers.ts";
 
 /**
  * WebSession against a real Chromium (spawned with CDP, like the sidecar)
@@ -119,6 +121,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   fake.mode = "normal";
+  fake.uploadRefusal = null;
   fake.hydrateMs = 1500;
   fake.acceptCodes = true;
   fake.activities = new Map(syntheticActivities().map((a) => [a.id, a]));
@@ -540,8 +543,70 @@ describe("photos", () => {
       uuid: result.uuid,
       taken_at: "2030-04-01T06:05:00.000Z",
     });
-    const upload = fake.requests.find((r) => r.path === `/upload-bucket/${result.uuid}`);
+    const upload = fake.requests.find(
+      (r) => r.method === "PUT" && r.path === `/upload-bucket/${result.uuid}`,
+    );
     expect(upload?.body).toBe(SYNTHETIC_PNG.length);
+    // Like the real presigned target, the bucket is not the strava.com origin.
+    expect(new URL(fake.uploadBaseUrl).origin).not.toBe(new URL(fake.baseUrl).origin);
+  });
+
+  it("reports a refusal by the upload host with its error code, never as a challenge", async () => {
+    const photo = {
+      bytes: SYNTHETIC_PNG,
+      contentType: "image/png",
+      takenAt: new Date("2030-04-01T06:05:00Z"),
+      athleteId: SYNTHETIC_ATHLETE_ID,
+    };
+    const secret = "SYNTHETICSIGNATUREVALUE";
+    fake.uploadRefusal = {
+      status: 403,
+      contentType: "application/xml",
+      body:
+        '<?xml version="1.0" encoding="UTF-8"?>\n<Error><Code>SignatureDoesNotMatch</Code>' +
+        "<Message>The request signature we calculated does not match.</Message>" +
+        `<SignatureProvided>${secret}</SignatureProvided>` +
+        `<StringToSign>PUT synthetic-key.png ${secret}</StringToSign></Error>`,
+    };
+    const session = open();
+    const notifier = new RecordingNotifier();
+    const gate = new WebGate({ session, notifier });
+    logLines.length = 0;
+    const error = await gate.run((s) => s.attachPhoto(RUN_ID, photo)).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WebUnexpectedResponseError);
+    expect(error).not.toBeInstanceOf(ChallengeError);
+    expect((error as Error).message).toBe("photo upload host returned 403 (SignatureDoesNotMatch)");
+    // The web gate stays open and the owner is not told to log in.
+    expect(gate.available()).toBe(true);
+    expect(notifier.sent).toEqual([]);
+    // Nothing was saved on the activity, and the session still works.
+    expect(fake.activities.get(RUN_ID)?.photos).toHaveLength(1);
+    expect((await session.health()).loggedIn).toBe(true);
+    // The log names the status and the code, never the body, signature, URL or key.
+    const logged = logLines.join("");
+    expect(logged).toContain('"uploadCode":"SignatureDoesNotMatch"');
+    expect(logged).toContain('"status":403');
+    for (const leak of [
+      secret,
+      "upload-bucket",
+      "X-Synthetic-Signature",
+      "StringToSign",
+      "localhost",
+    ])
+      expect(logged).not.toContain(leak);
+
+    // Statuses that pause the gate when strava.com sends them do not here.
+    for (const status of [401, 404, 429]) {
+      fake.uploadRefusal = {
+        status,
+        contentType: "text/html",
+        body: "<title>Just a moment</title>",
+      };
+      const other = await gate.run((s) => s.attachPhoto(RUN_ID, photo)).catch((e: unknown) => e);
+      expect((other as Error).message).toBe(`photo upload host returned ${status}`);
+      expect((other as WebUnexpectedResponseError).code).toBe("unexpected_response");
+    }
+    expect(gate.available()).toBe(true);
   });
 
   it("reports an unusable metadata answer and an unverified attach", async () => {

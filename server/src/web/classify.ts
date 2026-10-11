@@ -10,7 +10,7 @@ import {
  * Pure classification of what strava.com answered. Shared by page
  * navigations and in-page fetches so both detect expiry and challenges the
  * same way. Nothing here retries: a challenge is reported, never worked
- * around.
+ * around. Answers from any other host go through `classifyUpload` instead.
  */
 
 /** Paths Strava sends a logged-out browser to. */
@@ -75,6 +75,33 @@ export function classify(observed: Observed, options: ClassifyOptions): WebSessi
       `strava.com returned ${observed.status} for ${options.path}`,
     );
   return null;
+}
+
+/**
+ * The `<Code>` of an S3-style XML error body (SignatureDoesNotMatch,
+ * AccessDenied, RequestExpired, ...), or null. Nothing else of the body is
+ * ever kept: it can echo the signature, the signed string and the object key.
+ */
+export function uploadErrorCode(body: string): string | null {
+  const match = /<Error>[\s\S]*?<Code>\s*([A-Za-z][A-Za-z0-9]{0,63})\s*<\/Code>/.exec(
+    body.slice(0, 4096),
+  );
+  return match === null ? null : (match[1] as string);
+}
+
+/**
+ * Classification of what the photo upload host (the presigned target, never
+ * strava.com) answered. Its statuses say nothing about the strava.com
+ * session, so none of them is a login or a challenge: any non-2xx is an
+ * unexpected response that names the status and the error code only, never
+ * the URL (it carries the signature) or the object key.
+ */
+export function classifyUpload(status: number, body: string): WebUnexpectedResponseError | null {
+  if (status >= 200 && status < 300) return null;
+  const code = uploadErrorCode(body);
+  return new WebUnexpectedResponseError(
+    `photo upload host returned ${status}${code === null ? "" : ` (${code})`}`,
+  );
 }
 
 /** Filename from a Content-Disposition header (RFC 6266 `filename*` preferred). */

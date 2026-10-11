@@ -103,6 +103,14 @@ describe("path A (hide first)", () => {
     expect(group?.status).toBe("hidden");
     expect(group?.photosFlagged).toBe(true);
     expect(h.notifier.kinds()).toContain("photos_flagged");
+    // A refused upload is this photo's problem only: the web gate stays open
+    // (the hide after it went through), nothing freezes, no login alarm.
+    expect(h.web.available()).toBe(true);
+    expect(h.freeze.isFrozen()).toBe(false);
+    expect(h.notifier.kinds()).not.toContain("login_unhealthy");
+    expect(writesFor(h.db, { groupId: group!.id, kind: "photo" })).toMatchObject([
+      { status: "failed", result: { error: expect.stringMatching(/photo upload refused/) } },
+    ]);
   });
 
   it("flags unverified photo attaches too", async () => {
