@@ -316,6 +316,14 @@ describe("deletion step edge cases", () => {
       }
     };
     await h.poller.poll();
+    // Inside the confirmation window a lagging API answer is waited out.
+    expect(listGroups(h.db)[0]).toMatchObject({
+      status: "a_confirming",
+      lastError: "wait:deletion_confirming",
+    });
+    expect(h.freeze.isFrozen()).toBe(false);
+    h.clock.t += 61 * 60_000;
+    await h.machine.tick();
     const group = listGroups(h.db)[0]!;
     expect(group.status).toBe("failed");
     expect(h.freeze.isFrozen()).toBe(true);

@@ -104,7 +104,7 @@ export async function startFakeStravaApi(world: FakeWorld): Promise<FakeStravaAp
     const perPage = Number(q.per_page ?? 30);
     const page = Number(q.page ?? 1);
     return world
-      .live()
+      .apiLive()
       .filter((a) => a.startMs > after && a.startMs < before)
       .sort((a, b) => b.startMs - a.startMs || b.id - a.id)
       .slice((page - 1) * perPage, page * perPage)
@@ -112,7 +112,7 @@ export async function startFakeStravaApi(world: FakeWorld): Promise<FakeStravaAp
   });
 
   app.get<{ Params: { id: string } }>("/api/v3/activities/:id", (request, reply) => {
-    const a = world.get(Number(request.params.id));
+    const a = world.apiGet(Number(request.params.id));
     return a === undefined ? notFound(reply) : detail(a, origin);
   });
 

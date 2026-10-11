@@ -81,17 +81,29 @@ describe("deletion guards", () => {
     expect(listGroups(h.db)[0]?.status).toBe("done");
   });
 
-  it("freezes when the web claims a delete that the API does not confirm", async () => {
+  it("waits out the confirmation window, then freezes when the API never confirms a web delete", async () => {
     h = await createHarness({ settings: { switches: { delete: true } } });
     const outing = addOuting(h.world);
     h.session.deleteMode = "noop";
     await h.poller.poll();
+    expect(h.freeze.isFrozen()).toBe(false);
+    expect(listGroups(h.db)[0]?.lastError).toBe("wait:deletion_confirming");
+    expect(writesFor(h.db, { kind: "delete" })[0]).toMatchObject({
+      status: "sent",
+      result: { stillExists: true, webError: null },
+    });
+    h.clock.t += 61 * 60_000;
+    await h.machine.tick();
     expect(h.freeze.isFrozen()).toBe(true);
+    expect(h.freeze.state().reason).toMatch(/not confirmed by the API within 60 minutes/);
+    expect(h.notifier.kinds()).toContain("deletion_unconfirmed");
     expect(outing.fitbit.exists).toBe(true);
+    expect(writesFor(h.db, { kind: "delete" })).toHaveLength(1);
     expect(writesFor(h.db, { kind: "delete" })[0]).toMatchObject({
       status: "failed",
-      result: { stillExists: true },
+      result: { stillExists: true, webError: null },
     });
+    expect(h.session.calls.filter((c) => c.op === "delete")).toHaveLength(1);
     expect(listGroups(h.db)[0]?.status).toBe("b_delete_fitbit");
   });
 

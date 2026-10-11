@@ -39,6 +39,11 @@ const timingSchema = z
     keepaliveIntervalMs: positive.min(60_000),
     partnerWaitMs: z.number().int().min(0),
     gracePeriodMs: z.number().int().min(0),
+    /**
+     * How long a delete the web side confirmed may wait for the API 404
+     * (Strava's API kept listing web-deleted activities for 15 to 25 minutes).
+     */
+    deleteConfirmWindowMs: positive,
   })
   .strict();
 
@@ -147,6 +152,7 @@ export const DEFAULT_SETTINGS: Settings = {
     keepaliveIntervalMs: HOUR,
     partnerWaitMs: defaultPartnerWait,
     gracePeriodMs: 24 * HOUR,
+    deleteConfirmWindowMs: HOUR,
   },
   match: defaultMatch,
   merge: DEFAULT_MERGE_SETTINGS,

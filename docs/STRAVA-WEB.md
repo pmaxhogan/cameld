@@ -191,6 +191,16 @@ challenged, the delete was sent but its outcome is UNKNOWN:
 success. The state machine must ALSO confirm deletion through the API
 (`GET /api/v3/activities/{id}` -> 404) before recording an activity as gone.
 
+Observed live: after a web delete the activity page redirected to the
+dashboard and the activity left the web training list and weekly totals at
+once, but the API kept returning it, by id and in the athlete activity list,
+for roughly 15 to 25 minutes before answering 404. One immediate API check
+therefore cannot confirm a web delete. A delete the web side confirmed waits
+for the API 404 for up to `timing.deleteConfirmWindowMs` (default 60 minutes;
+"Wait for Strava's API to confirm a delete" in the settings) and is never
+sent again meanwhile; only past the window do writes freeze. See
+ARCHITECTURE.md section 5, "Delete confirmation window".
+
 ### Unverified until the first live session
 
 - The athlete-menu selector used for "logged in" (`athleteMenuSelector`).

@@ -63,6 +63,7 @@ export function settings(): ApiSettings {
       keepaliveIntervalMs: 600_000,
       partnerWaitMs: 4 * 3_600_000,
       gracePeriodMs: 48 * 3_600_000,
+      deleteConfirmWindowMs: 3_600_000,
     },
     match: {
       autoMinOverlap: 0.8,

@@ -1,4 +1,4 @@
-import { Counter, Gauge, Registry, collectDefaultMetrics } from "prom-client";
+import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from "prom-client";
 import type { RateLimitUsage } from "../strava/rate-limiter.ts";
 
 /**
@@ -43,6 +43,7 @@ export class Metrics {
   readonly backups: Counter<"result">;
   readonly originalExports: Counter<"result">;
   readonly webRemediations: Counter<"result">;
+  readonly deleteConfirmDelay: Histogram;
 
   constructor(options: MetricsOptions) {
     const { sources } = options;
@@ -86,6 +87,12 @@ export class Metrics {
       name: "cameld_web_remediations_total",
       help: "Hung browser tab remediations by result: recovered or failed",
       labelNames: ["result"],
+      registers,
+    });
+    this.deleteConfirmDelay = new Histogram({
+      name: "cameld_delete_confirmation_delay_seconds",
+      help: "Time from sending a web delete to the API answering 404 for that activity",
+      buckets: [5, 60, 300, 600, 900, 1200, 1500, 1800, 2700, 3600, 7200],
       registers,
     });
     this.lastPoll = new Gauge({

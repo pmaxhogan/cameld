@@ -165,6 +165,25 @@ export class FakeWorld {
     return [...this.activities.values()].filter((a) => this.get(a.id) !== undefined);
   }
 
+  /**
+   * The API is eventually consistent after a web delete: while this returns
+   * true for a deleted activity, the API still serves it by id and in the
+   * athlete activity list (the web pages already treat it as gone).
+   */
+  apiLags: ((id: number) => boolean) | undefined;
+
+  /** What the API answers for an id (see `apiLags`). */
+  apiGet(id: number): WorldActivity | undefined {
+    const activity = this.activities.get(id);
+    if (activity !== undefined && !activity.exists && this.apiLags?.(id) === true) return activity;
+    return this.get(id);
+  }
+
+  /** What the API lists (see `apiLags`). */
+  apiLive(): WorldActivity[] {
+    return [...this.activities.values()].filter((a) => this.apiGet(a.id) !== undefined);
+  }
+
   createUpload(input: {
     bytes: Buffer;
     dataType: string;
