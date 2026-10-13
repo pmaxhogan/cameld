@@ -20,7 +20,7 @@
     "typecheck": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
-    "@garmin/fitsdk": "^21.217.0",
+    "@garmin/fitsdk": "^21.218.0",
     "fast-xml-parser": "^5.11.2",
     "zod": "^4.6.5"
   }
