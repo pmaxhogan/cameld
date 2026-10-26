@@ -13,7 +13,7 @@
   "dependencies": {
     "@cameld/shared": "^0.1.0",
     "@primeuix/themes": "^2.0.3",
-    "maplibre-gl": "^6.14.0",
+    "maplibre-gl": "^6.15.0",
     "primevue": "^4.5.5",
     "vue": "^3.5.44"
   },
@@ -21,7 +21,7 @@
     "@vitejs/plugin-vue": "^6.0.10",
     "@vue/test-utils": "^2.5.1",
     "happy-dom": "^20.14.6",
-    "vite": "^8.3.4",
+    "vite": "^8.3.5",
     "vue-tsc": "^3.3.13"
   }
 }
