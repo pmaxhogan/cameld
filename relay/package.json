@@ -11,10 +11,10 @@
     "migrate:remote": "npx --yes wrangler@4 d1 migrations apply cameld-relay --remote"
   },
   "dependencies": {
-    "postal-mime": "^4.0.7"
+    "postal-mime": "^4.1.4"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20261016.1"
+    "@cloudflare/workers-types": "^5.20261023.1"
   },
   "//wrangler": "wrangler is deliberately not a dependency: it is large, only the owner deploys, and CI never needs it. Scripts run it through npx."
 }
