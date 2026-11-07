@@ -129,5 +129,6 @@ deploy it. Red CI is fixed forward, never reverted. `.claude/cameld-spec.md` is 
 - mode: deps.dependabot-mechanism=native
 - mode: test.coverage-ratchet=compare-job
 - exception: deps.dependabot-policy - .github/dependabot.yml is hand-kept, not stamped: it adds a docker ecosystem and ignores majors of primevue, @primeuix/themes, typescript, vitest and @vitest/coverage-v8. Reason: license and toolchain pins listed under Dependency pins. (2026-11-07)
+- exception: repo.no-protection - Ruleset required-ci-checks requires the six CI checks on main (repo admin bypasses, so direct pushes still work); no PR or review requirement. Reason: native Dependabot auto-merge (deps.dependabot-mechanism=native) merges immediately without required checks. (2026-11-07)
 
 <!-- stack:end -->
