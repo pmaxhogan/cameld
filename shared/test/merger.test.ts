@@ -5,11 +5,15 @@ import {
   DEFAULT_MERGE_SETTINGS,
   MERGED_SOURCE,
   MergeError,
+  STALE_FIX_CONTRADICTION_METERS,
+  STALE_FIX_MIN_SECONDS,
   alignedSecond,
   mergeSamples,
   sportCategory,
+  staleFitbitFixes,
   type MergeInput,
 } from "../src/merge/merger.ts";
+import { distanceMeters } from "../src/match/geo.ts";
 import { checkNoLoss } from "../src/merge/no-loss.ts";
 import { SYNTHETIC_ORIGIN, SYNTHETIC_START } from "./fixtures/synthetic-track.ts";
 
@@ -294,5 +298,108 @@ describe("impossible-speed filter", () => {
     expect(result.samples[40]!.lat).toBeUndefined();
     const reanchor = { ...DEFAULT_MERGE_SETTINGS, reanchorAfter: 5 };
     expect(merge({ app: [at(20, pos(20))], fitbit }, reanchor).samples[5]).toMatchObject(pos(2005));
+  });
+});
+
+describe("stale-fix filter", () => {
+  /** Fitbit fixes holding `held` every `step` s from `from` to `to` inclusive. */
+  function heldRun(from: number, to: number, held: { lat: number; lng: number }, step = 4) {
+    const out: ActivitySample[] = [];
+    for (let s = from; s <= to; s += step) out.push(at(s, { ...held, heartRate: 100 }));
+    return out;
+  }
+
+  it("drops a held watch fix the phone contradicts (no-GPS-lock start)", () => {
+    const held = pos(750);
+    const fitbit = heldRun(0, 200, held);
+    const heldCount = fitbit.length;
+    // The watch then moves normally, tracking the phone to within a metre.
+    for (let s = 204; s <= 300; s += 4) fitbit.push(at(s, pos(2 * (s - 50) + 1)));
+    // The phone starts 50 s late, 750 m from the held point, moving at 2 m/s.
+    const app: ActivitySample[] = [];
+    for (let s = 50; s <= 300; s += 1) app.push(at(s, pos(2 * (s - 50))));
+
+    const result = merge({ app, fitbit, sport: "Ride" });
+
+    const located = result.samples
+      .map((sample, i) => ({ sample, i }))
+      .filter(({ sample }) => sample.lat !== undefined && sample.lng !== undefined);
+    expect(located[0]!.sample.time).toBe(S + 50_000);
+    expect(result.provenance[located[0]!.i]!.lat).toEqual({ side: "app", index: 0 });
+    for (const { sample } of located) {
+      if (sample.time < S + 50_000) throw new Error("located sample before the app started");
+    }
+    // The held point never appears in the merged track.
+    expect(located.some(({ sample }) => sample.lat === held.lat && sample.lng === held.lng)).toBe(
+      false,
+    );
+    // Every held fix is ledgered, both coordinates.
+    for (let index = 0; index < heldCount; index += 1) {
+      const entries = reasons(result).filter((r) => r.startsWith(`fitbit:${index}:l`));
+      expect(entries.sort()).toEqual([
+        `fitbit:${index}:lat:stale_fix`,
+        `fitbit:${index}:lng:stale_fix`,
+      ]);
+    }
+    expect(result.ledger.filter((e) => e.reason === "stale_fix")).toHaveLength(heldCount * 2);
+    // No jump: consecutive located samples stay under the ride limit.
+    for (let k = 1; k < located.length; k += 1) {
+      const a = located[k - 1]!.sample;
+      const b = located[k]!.sample;
+      const mps =
+        distanceMeters({ lat: a.lat!, lng: a.lng! }, { lat: b.lat!, lng: b.lng! }) /
+        ((b.time - a.time) / 1000);
+      expect(mps).toBeLessThan(DEFAULT_MERGE_SETTINGS.speedLimitsMps.ride);
+    }
+  });
+
+  it("keeps a held run the app does not contradict (a real stop)", () => {
+    const held = pos(100);
+    const fitbit = heldRun(0, 60, held);
+    const app = [0, 20, 40, 60].map((s) => at(s, pos(100 + (s % 3))));
+    expect(staleFitbitFixes(app, fitbit, 0).size).toBe(0);
+    const result = merge({ app, fitbit });
+    expect(result.ledger.filter((e) => e.reason === "stale_fix")).toEqual([]);
+  });
+
+  it("keeps a held run shorter than the minimum even if the app is far away", () => {
+    const fitbit = heldRun(0, STALE_FIX_MIN_SECONDS - 2, pos(0), 2);
+    const app = [10, 20].map((s) => at(s, pos(500)));
+    expect(staleFitbitFixes(app, fitbit, 0).size).toBe(0);
+    expect(merge({ app, fitbit }).ledger.filter((e) => e.reason === "stale_fix")).toEqual([]);
+  });
+
+  it("treats a run of exactly the minimum length as held", () => {
+    const fitbit = heldRun(0, STALE_FIX_MIN_SECONDS, pos(0), 5);
+    const app = [at(10, pos(STALE_FIX_CONTRADICTION_METERS + 5))];
+    expect(staleFitbitFixes(app, fitbit, 0).size).toBe(fitbit.length);
+  });
+
+  it("keeps a held run when the app has no fix during its span", () => {
+    const fitbit = heldRun(0, 60, pos(0));
+    const app = [at(100, pos(500)), at(110, pos(520))];
+    expect(staleFitbitFixes(app, fitbit, 0).size).toBe(0);
+    const result = merge({ app, fitbit });
+    expect(result.ledger.filter((e) => e.reason === "stale_fix")).toEqual([]);
+  });
+
+  it("keeps a held run when the app only strays within the contradiction distance", () => {
+    const fitbit = heldRun(0, 60, pos(0));
+    const app = [at(30, pos(STALE_FIX_CONTRADICTION_METERS - 1))];
+    expect(staleFitbitFixes(app, fitbit, 0).size).toBe(0);
+  });
+
+  it("applies the clock offset when deciding the run's span", () => {
+    const fitbit = heldRun(0, 60, pos(0));
+    // The far app fix is at second 100: outside the run unshifted, inside at +50.
+    const app = [at(100, pos(500))];
+    expect(staleFitbitFixes(app, fitbit, 0).size).toBe(0);
+    expect(staleFitbitFixes(app, fitbit, 50).size).toBe(fitbit.length);
+    // A shift that moves the run away from the app fix un-contradicts it.
+    const near = [at(30, pos(500))];
+    expect(staleFitbitFixes(near, fitbit, 0).size).toBe(fitbit.length);
+    expect(staleFitbitFixes(near, fitbit, 100).size).toBe(0);
+    const shifted = merge({ app, fitbit, offsetSeconds: 50 });
+    expect(shifted.ledger.filter((e) => e.reason === "stale_fix")).toHaveLength(fitbit.length * 2);
   });
 });

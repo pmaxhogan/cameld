@@ -14,6 +14,8 @@ export type ExclusionReason =
   | "position_app_preferred"
   /** A Fitbit-derived fix implying an impossible speed for the sport (L12). */
   | "impossible_speed"
+  /** A Fitbit fix held unchanged while the app shows the athlete elsewhere (L12). */
+  | "stale_fix"
   /** The field is taken from the other source for the whole merge (L10). */
   | "field_source_preferred"
   /** Superseded by a later record of the same source in the same second. */

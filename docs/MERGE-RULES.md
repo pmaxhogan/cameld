@@ -95,6 +95,14 @@ Recorded so the code and this file agree (shared/src/match, shared/src/merge).
 - The speed filter accepts the 30th consecutive would-be drop as the new
   anchor (29 are dropped). An app fix in between restarts the count. Sports
   outside walk, hike, run and ride are not filtered by default.
+- Stale wrist fixes: without a GPS lock a watch can repeat one fix on every
+  record. A run of Fitbit fixes with exactly identical coordinates lasting
+  30 s or more is dropped as stale_fix when the app has a fix more than 50 m
+  from it during the run. The whole run goes, including any part before the
+  app started or after it stopped, so the merged track never begins or ends
+  at a point the athlete was not at (it showed up as a straight jump to the
+  app's first fix). A run the app does not contradict is a real stop and is
+  kept.
 - Groups with three sources, splits on both sides, or overlapping parts on
   one side go to review. A pair where only one side has GPS is judged by the
   non-GPS rule.

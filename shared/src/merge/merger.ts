@@ -43,6 +43,15 @@ import type { ExclusionReason, LedgerEntry, MergeSide, SampleRef } from "./ledge
  * instead (re-anchor) and the count restarts. Unknown sports are not
  * filtered unless a default limit is set.
  *
+ * Stale-fix filter (Fitbit fixes only): a run of consecutive Fitbit fixes
+ * with exactly the same coordinates, lasting at least STALE_FIX_MIN_SECONDS,
+ * is a held position (the watch repeating one fix while it has no GPS lock)
+ * when the app has a fix more than STALE_FIX_CONTRADICTION_METERS from it
+ * during the run. The whole run goes to the ledger as stale_fix, including
+ * the part outside the app's span, so the merged track does not start or end
+ * at a point the athlete was not at. A run the app cannot contradict (no app
+ * fix during it, or every app fix near it) is a real stop and is kept.
+ *
  * Nothing is smoothed, interpolated or invented: every output value is an
  * input value, and every output timestamp is an input's aligned second.
  */
@@ -132,6 +141,11 @@ interface Slot {
   fields: Partial<Record<Exclude<SampleField, "lat" | "lng">, Valued>>;
 }
 
+/** Shortest held Fitbit fix the stale-fix filter considers, seconds. */
+export const STALE_FIX_MIN_SECONDS = 30;
+/** App distance from a held Fitbit fix that proves the fix stale, metres. */
+export const STALE_FIX_CONTRADICTION_METERS = 50;
+
 const VALUE_FIELDS = ["altitude", "heartRate", "cadence", "distance", "speed"] as const;
 type ValueField = (typeof VALUE_FIELDS)[number];
 
@@ -203,6 +217,7 @@ function slotsFor(
   samples: readonly ActivitySample[],
   offsetSeconds: number,
   ledger: Ledger,
+  stale: ReadonlySet<number> = new Set(),
 ): Map<number, Slot> {
   const slots = new Map<number, Slot>();
   samples.forEach((sample, index) => {
@@ -217,6 +232,8 @@ function slotsFor(
       const equalFix: number[] = [];
       if (!inRange("lat", sample.lat) || !inRange("lng", sample.lng)) {
         ledger.addFix(side, index, "outside_fit_range");
+      } else if (stale.has(index)) {
+        ledger.addFix(side, index, "stale_fix");
       } else {
         const previous = slot.fix;
         if (previous !== undefined) {
@@ -255,6 +272,49 @@ function slotsFor(
   return slots;
 }
 
+/**
+ * Indexes of Fitbit fixes in held runs the app contradicts (see the
+ * stale-fix filter in the module doc). Both inputs are in time order.
+ */
+export function staleFitbitFixes(
+  app: readonly ActivitySample[],
+  fitbit: readonly ActivitySample[],
+  offsetSeconds: number,
+): Set<number> {
+  const stale = new Set<number>();
+  const appFixes = app.filter((s) => s.lat !== undefined && s.lng !== undefined);
+  if (appFixes.length === 0) return stale;
+  const offsetMs = offsetSeconds * 1000;
+  let run: number[] = [];
+  const close = (): void => {
+    if (run.length < 2) return;
+    const first = fitbit[run[0]!]!;
+    const last = fitbit[run[run.length - 1]!]!;
+    if (last.time - first.time < STALE_FIX_MIN_SECONDS * 1000) return;
+    const held = { lat: first.lat!, lng: first.lng! };
+    const from = first.time + offsetMs;
+    const to = last.time + offsetMs;
+    const contradicted = appFixes.some(
+      (s) =>
+        s.time >= from &&
+        s.time <= to &&
+        distanceMeters(held, { lat: s.lat!, lng: s.lng! }) > STALE_FIX_CONTRADICTION_METERS,
+    );
+    if (contradicted) for (const index of run) stale.add(index);
+  };
+  fitbit.forEach((sample, index) => {
+    if (sample.lat === undefined || sample.lng === undefined) return;
+    const previous = run.length > 0 ? fitbit[run[run.length - 1]!]! : undefined;
+    if (previous !== undefined && (previous.lat !== sample.lat || previous.lng !== sample.lng)) {
+      close();
+      run = [];
+    }
+    run.push(index);
+  });
+  close();
+  return stale;
+}
+
 function speedLimit(sport: string | null, settings: MergeSettings): number | null {
   const category = sportCategory(sport);
   return category === null ? settings.defaultSpeedLimitMps : settings.speedLimitsMps[category];
@@ -269,7 +329,13 @@ export function mergeSamples(
   const ledger = new Ledger({ app: input.app, fitbit: input.fitbit }, offsetSeconds);
   const slots: Record<MergeSide, Map<number, Slot>> = {
     app: slotsFor("app", input.app, offsetSeconds, ledger),
-    fitbit: slotsFor("fitbit", input.fitbit, offsetSeconds, ledger),
+    fitbit: slotsFor(
+      "fitbit",
+      input.fitbit,
+      offsetSeconds,
+      ledger,
+      staleFitbitFixes(input.app, input.fitbit, offsetSeconds),
+    ),
   };
   const seconds = [...new Set([...slots.app.keys(), ...slots.fitbit.keys()])].sort((a, b) => a - b);
 

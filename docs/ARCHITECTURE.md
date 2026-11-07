@@ -66,7 +66,7 @@ cameld is a Node.js/TypeScript service that:
 | L9 | Position: the phone GPS wherever it has a fix. The wrist position only where the phone has none, including before it started and after it stopped. |
 | L10 | Heart rate and cadence come from the wrist device. Elevation comes from the phone. |
 | L11 | Time alignment: clock first, GPS-corrected. Measure the offset that best aligns the tracks and apply it only when small and confident. A large or uncertain offset parks the pair for review. |
-| L12 | Single-source stretches are used as recorded. Only points implying an impossible speed for the sport are dropped. Dropped points stay in the backup. No smoothing, nothing invented. |
+| L12 | Single-source stretches are used as recorded. Only points implying an impossible speed for the sport, and wrist fixes held unchanged while the phone shows the athlete elsewhere, are dropped. Dropped points stay in the backup. No smoothing, nothing invented. |
 | L13 | The merged file format is FIT. |
 | L14 | Carry over title, description, photos and anything else portable (gear, sport type, commute and trainer flags, perceived exertion, private notes). Kudos and comments cannot move: the merge proceeds and they are archived. |
 | L15 | A custom title beats a Strava default. If both are custom, the phone one wins and the other goes in the description. |
