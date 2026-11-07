@@ -18,11 +18,11 @@ updates:
         update-types:
           - minor
           - patch
+      # Any semver type: a security fix merges on green (stack D-DEP-6).
       security:
         applies-to: security-updates
-        update-types:
-          - minor
-          - patch
+        patterns:
+          - "*"
     ignore:
       # PrimeVue 5 moved to the commercial PrimeUI license model, which needs a
       # per-deployment key a public repo cannot ship. Stay on 4.x MIT.
@@ -45,6 +45,11 @@ updates:
       - dependency-name: "@vitest/coverage-v8"
         update-types:
           - version-update:semver-major
+    cooldown:
+      default-days: 3
+      semver-major-days: 14
+      semver-minor-days: 3
+      semver-patch-days: 0
     commit-message:
       prefix: "deps"
       include: scope
@@ -56,6 +61,11 @@ updates:
       day: monday
       time: "06:00"
       timezone: America/New_York
+    cooldown:
+      default-days: 3
+      semver-major-days: 14
+      semver-minor-days: 3
+      semver-patch-days: 0
     commit-message:
       prefix: "deps(docker)"
 
@@ -67,9 +77,19 @@ updates:
       time: "06:00"
       timezone: America/New_York
     groups:
-      actions:
+      minor-and-patch:
+        applies-to: version-updates
         update-types:
           - minor
           - patch
+      security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+    cooldown:
+      default-days: 3
+      semver-major-days: 14
+      semver-minor-days: 3
+      semver-patch-days: 0
     commit-message:
       prefix: "deps(actions)"

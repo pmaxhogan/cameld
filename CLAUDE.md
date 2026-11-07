@@ -112,8 +112,22 @@ Workers runtime. Only synthetic mail in tests.
 
 ## Workflow
 
-Main is protected: changes go through pull requests, never direct pushes. Open
-a PR and run `gh pr merge --auto --squash`; it merges once the CI checks pass
-(no approvals required, branches need not be up to date). Dependabot minor and
-patch PRs are approved and auto-merged by workflow; majors need manual review.
-Red CI is fixed forward, never reverted. `.claude/cameld-spec.md` is private and gitignored.
+Ship by direct push to `main` after running tests, lint and typecheck locally
+and reviewing your own diff (stack standard ship.policy); no feature branches or
+PRs. A push to main runs CI, and a green CI on main builds the image, which
+Watchtower on the NAS picks up within minutes. Dependabot minor and patch PRs
+(and dev-only majors, and security fixes) are approved and auto-merged by
+`.github/workflows/dependabot-auto-merge.yml`; production majors need manual
+review. A merge made by that workflow without an App token does not trigger CI
+on main, so run `gh workflow run ci.yml --ref main` afterwards to build and
+deploy it. Red CI is fixed forward, never reverted. `.claude/cameld-spec.md` is private and gitignored.
+
+<!-- stack:begin (managed by the stack plugin; edit via /stack:remember or by hand, keep the markers) -->
+
+## Stack
+
+- mode: deps.dependabot-mechanism=native
+- mode: test.coverage-ratchet=compare-job
+- exception: deps.dependabot-policy - .github/dependabot.yml is hand-kept, not stamped: it adds a docker ecosystem and ignores majors of primevue, @primeuix/themes, typescript, vitest and @vitest/coverage-v8. Reason: license and toolchain pins listed under Dependency pins. (2026-11-07)
+
+<!-- stack:end -->
