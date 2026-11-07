@@ -7,22 +7,24 @@ import { computed, ref } from "vue";
 import { apiPost, errorText } from "../api.ts";
 import TrackComparison from "../components/TrackComparison.vue";
 import { readMetrics } from "../format.ts";
-import { groupTitle } from "../labels.ts";
+import { alignmentLabel, groupTitle, reasonLabel } from "../labels.ts";
 import { groupHref } from "../router.ts";
 
 const props = defineProps<{ item: ReviewItem; styleUrl: string | null }>();
 const emit = defineEmits<{ decided: [summary: GroupSummary] }>();
 
+const metrics = computed(() => readMetrics(props.item.match));
+
 const note = ref("");
-const offset = ref("");
+// Prefilled with the measured clock difference: left blank, the merge would
+// line the two recordings up with no clock correction at all.
+const offset = ref(String(metrics.value.suggestedOffset));
 const busy = ref(false);
 const error = ref<string | null>(null);
 
-const metrics = computed(() => readMetrics(props.item.match));
-
 async function decide(decision: ReviewDecision["decision"]): Promise<void> {
   const body: ReviewDecision = { decision, note: note.value.trim() };
-  if (offset.value.trim() !== "") {
+  if (decision === "approve" && offset.value.trim() !== "") {
     const seconds = Number(offset.value);
     if (!Number.isFinite(seconds)) {
       error.value = "Offset must be a number of seconds";
@@ -65,18 +67,31 @@ async function decide(decision: ReviewDecision["decision"]): Promise<void> {
       <dd>{{ metrics.median }}</dd>
       <dt>90th pct distance</dt>
       <dd>{{ metrics.p90 }}</dd>
-      <dt>Clock alignment</dt>
-      <dd>{{ metrics.alignStatus }}, offset {{ metrics.alignOffset }}</dd>
+      <dt>Clock difference</dt>
+      <dd data-testid="review-alignment">
+        {{ alignmentLabel(metrics.alignStatus) }}. Best fit: wrist clock
+        {{ metrics.bestOffset }} behind the phone.
+        <code class="code">{{ metrics.alignStatus }}</code>
+      </dd>
       <dt>Sharpness</dt>
       <dd>{{ metrics.sharpness }}</dd>
-      <dt>Reasons</dt>
-      <dd>{{ metrics.reasons.join(", ") }}</dd>
+      <dt>Why it is here</dt>
+      <dd>
+        <ul class="reasons" data-testid="review-reasons">
+          <li v-for="reason in metrics.reasons" :key="reason">
+            {{ reasonLabel(reason) }} <code class="code">{{ reason }}</code>
+          </li>
+        </ul>
+      </dd>
     </dl>
 
     <div class="decide">
       <label for="review-note">Note</label>
       <Textarea id="review-note" v-model="note" rows="2" data-testid="review-note" />
-      <label for="review-offset">Clock offset on approve (seconds, optional)</label>
+      <label for="review-offset">
+        Clock correction on approve (seconds the wrist clock is behind the phone; prefilled with the
+        measured value)
+      </label>
       <input
         id="review-offset"
         v-model="offset"
@@ -130,6 +145,14 @@ async function decide(decision: ReviewDecision["decision"]): Promise<void> {
 }
 .metrics dd {
   margin: 0;
+}
+.reasons {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+.code {
+  opacity: 0.6;
+  font-size: 0.75rem;
 }
 .decide {
   display: grid;

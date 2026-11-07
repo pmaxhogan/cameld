@@ -1,4 +1,9 @@
-import type { DryRunEntryInfo, WindowUsage } from "@cameld/shared";
+import {
+  type AlignmentStatus,
+  type DryRunEntryInfo,
+  suggestedOffsetSeconds,
+  type WindowUsage,
+} from "@cameld/shared";
 
 /**
  * Pure display helpers. The server hands several fields over as `unknown`
@@ -61,6 +66,10 @@ export interface MetricsView {
   p90: string;
   alignStatus: string;
   alignOffset: string;
+  /** Best-fit clock offset that was measured, applied or not. */
+  bestOffset: string;
+  /** Offset to prefill on approve (shared suggestedOffsetSeconds). */
+  suggestedOffset: number;
   sharpness: string;
   reasons: string[];
 }
@@ -80,6 +89,14 @@ export function readMetrics(match: unknown): MetricsView {
     p90: fmtNum(proximity.p90Meters, " m"),
     alignStatus: typeof alignment.status === "string" ? alignment.status : NONE,
     alignOffset: fmtNum(alignment.offsetSeconds, " s", 0),
+    bestOffset: fmtNum(alignment.bestOffsetSeconds, " s", 0),
+    suggestedOffset: suggestedOffsetSeconds({
+      status: (typeof alignment.status === "string"
+        ? alignment.status
+        : "no_gps") as AlignmentStatus,
+      offsetSeconds: num(alignment.offsetSeconds) ?? 0,
+      bestOffsetSeconds: num(alignment.bestOffsetSeconds),
+    }),
     sharpness: fmtNum(alignment.sharpness, "", 2),
     reasons,
   };

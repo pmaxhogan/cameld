@@ -1,10 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
   type ActivitySample,
+  type AlignmentResult,
   type GroupTracks,
   type LngLat,
   type MergeSettings,
   readFitActivity,
+  suggestedOffsetSeconds,
   type TrackLine,
 } from "@cameld/shared";
 import { readStoredOriginal, readVerifiedFile } from "../service/backup.ts";
@@ -40,12 +42,15 @@ export function toLine(label: string, samples: readonly ActivitySample[]): Track
   return { label, coordinates, points: located.length };
 }
 
+/**
+ * Offset for the merge preview: the group's own once set, else what the
+ * review form suggests (the measured best fit for a clock-parked pair), so
+ * the preview shows the merge an approval with the suggested offset builds.
+ */
 function offsetOf(group: GroupRow): number {
   if (group.offsetSeconds !== 0) return group.offsetSeconds;
-  const match = group.match as {
-    metrics?: { alignment?: { offsetSeconds?: number } | null } | null;
-  };
-  return match?.metrics?.alignment?.offsetSeconds ?? 0;
+  const match = group.match as { metrics?: { alignment?: AlignmentResult | null } | null };
+  return suggestedOffsetSeconds(match?.metrics?.alignment ?? null);
 }
 
 export async function groupTracks(

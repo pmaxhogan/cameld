@@ -17,6 +17,43 @@ export const PARK_REASONS: Record<string, string> = {
     "Parked: Strava has no original file for a member (a manual entry), so it is backed up from streams and never deleted",
 };
 
+/**
+ * Why the matcher decided what it did (MatchReason in shared/src/match/matcher.ts).
+ * "Phone" is the app or other non-Fitbit recording, "wrist" the Fitbit one.
+ */
+export const MATCH_REASON_LABELS: Record<string, string> = {
+  no_overlap: "The two recordings do not overlap in time",
+  single_source: "Every recording came from the same device, so there is nothing to merge",
+  start_delta_too_large: "They started too far apart and barely overlap",
+  gps_too_far: "Their GPS tracks are too far apart to be the same activity",
+  more_than_two_sources:
+    "Recordings from more than two devices; cameld only merges two, so reject it",
+  many_to_many:
+    "Both sides are split into several parts, so it is unclear which pieces belong together",
+  overlapping_parts: "Parts on one side overlap each other in time",
+  overlap_below_auto:
+    "They overlap for less than 80% of the shorter recording, too little to merge without a check",
+  sport_mismatch: "The two recordings have different sport types",
+  sport_unknown: "A recording has no sport type",
+  gps_review_band: "The GPS tracks are close but not close enough to merge without a check",
+  gps_not_comparable: "Not enough GPS points line up in time to compare the two tracks",
+  alignment_large_offset:
+    "The phone and wrist clocks disagree by more than 15 seconds, more than cameld corrects on its own",
+  alignment_uncertain:
+    "The clocks look a few seconds apart, but the tracks are not quite close enough (over 2 m) for cameld to trust that correction on its own",
+  gps_within_auto: "The GPS tracks line up closely (OK)",
+  non_gps_rule: "One side has no GPS, so only time overlap and sport were checked (OK)",
+};
+
+/** Clock alignment outcome (AlignmentStatus in shared/src/match/align.ts). */
+export const ALIGNMENT_LABELS: Record<string, string> = {
+  applied: "Clock difference measured and corrected",
+  flat: "No clear clock difference found; none applied",
+  large_offset: "Large clock difference found; waiting for you to confirm it",
+  uncertain: "Small clock difference found but not certain; waiting for you to confirm it",
+  no_gps: "No GPS to measure the clocks with",
+};
+
 /** What each event in a group's timeline means. */
 export const EVENT_LABELS: Record<string, string> = {
   detected: "Detected as a possible pair",
@@ -131,6 +168,14 @@ function lookup(table: Record<string, string>, code: string | null): string {
 
 export function parkLabel(reason: string | null): string {
   return lookup(PARK_REASONS, reason);
+}
+
+export function reasonLabel(reason: string): string {
+  return lookup(MATCH_REASON_LABELS, reason);
+}
+
+export function alignmentLabel(status: string | null): string {
+  return lookup(ALIGNMENT_LABELS, status);
 }
 
 export function eventLabel(event: string): string {

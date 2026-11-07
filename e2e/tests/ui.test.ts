@@ -15,6 +15,9 @@ test("frozen banner: shows the reason and unfreezes with a reason", async ({ sig
 });
 
 test("review queue: compares the tracks and approves with a note", async ({ signedIn: page }) => {
+  // MapLibre draws tracks in a web worker; when its file is missing the maps
+  // show only the basemap. The worker must load from cameld's own assets.
+  const worker = page.waitForResponse((r) => /maplibre-gl-worker.*\.mjs/.test(r.url()));
   await page.getByTestId("nav-review").click();
   const item = page.getByTestId("review-item");
   await expect(item).toHaveCount(1);
@@ -23,6 +26,10 @@ test("review queue: compares the tracks and approves with a note", async ({ sign
   await expect(page.getByTestId("map-side-app")).toBeVisible();
   await expect(page.getByTestId("map-side-fitbit")).toBeVisible();
   await expect(page.getByTestId("map-overlay")).toBeVisible();
+  const workerResponse = await worker;
+  expect(workerResponse.status()).toBe(200);
+  expect(workerResponse.headers()["content-type"]).toContain("javascript");
+  await expect(page.getByTestId("review-reasons")).not.toBeEmpty();
   await page.getByTestId("review-note").fill("same synthetic loop");
   await page.getByTestId("approve-button").click();
   await expect(page.getByTestId("review-result")).toBeVisible();

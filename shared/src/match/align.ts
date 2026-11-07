@@ -186,3 +186,20 @@ export function alignClocks(
   }
   return { ...base, ...found, status: "applied", offsetSeconds: bestOffset };
 }
+
+/**
+ * The clock offset to offer the owner when a pair sits in the review queue:
+ * the applied offset, or for a pair parked because of its clock ("large_offset",
+ * "uncertain") the sharp best fit that was measured but not applied. A flat or
+ * missing curve suggests 0, as the automatic path would use.
+ */
+export function suggestedOffsetSeconds(
+  alignment: Pick<AlignmentResult, "status" | "offsetSeconds" | "bestOffsetSeconds"> | null,
+): number {
+  if (alignment === null) return 0;
+  if (alignment.status === "applied") return alignment.offsetSeconds;
+  if (alignment.status === "large_offset" || alignment.status === "uncertain") {
+    return alignment.bestOffsetSeconds ?? 0;
+  }
+  return 0;
+}

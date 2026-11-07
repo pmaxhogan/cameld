@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ActivitySample } from "../src/activity/sample.ts";
-import { alignClocks, pairedDistances } from "../src/match/align.ts";
+import {
+  alignClocks,
+  type AlignmentStatus,
+  pairedDistances,
+  suggestedOffsetSeconds,
+} from "../src/match/align.ts";
 import { distanceMeters, median, percentile } from "../src/match/geo.ts";
 import { DEFAULT_ALIGNMENT_SETTINGS } from "../src/match/settings.ts";
 import { syntheticPair } from "./fixtures/pair-generator.ts";
@@ -145,5 +150,19 @@ describe("alignClocks", () => {
     expect(pairedDistances(app, [fixAt(0, 0)], 0)).toEqual([0]);
     const narrow = { ...DEFAULT_ALIGNMENT_SETTINGS, searchRangeSeconds: 2, minAlignedPoints: 1 };
     expect(alignClocks(app, [fixAt(0, 0)], narrow).curve).toHaveLength(5);
+  });
+});
+
+describe("suggestedOffsetSeconds", () => {
+  it("offers the applied offset, a parked best fit, or 0", () => {
+    const at = (status: AlignmentStatus, offsetSeconds: number, best: number | null) =>
+      suggestedOffsetSeconds({ status, offsetSeconds, bestOffsetSeconds: best });
+    expect(suggestedOffsetSeconds(null)).toBe(0);
+    expect(at("applied", 5, 5)).toBe(5);
+    expect(at("large_offset", 0, 24)).toBe(24);
+    expect(at("uncertain", 0, -3)).toBe(-3);
+    expect(at("uncertain", 0, null)).toBe(0);
+    expect(at("flat", 0, 40)).toBe(0);
+    expect(at("no_gps", 0, null)).toBe(0);
   });
 });

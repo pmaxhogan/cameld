@@ -1,6 +1,10 @@
+import type { MatchReason } from "@cameld/shared";
 import { describe, expect, it } from "vitest";
 import {
+  alignmentLabel,
   eventLabel,
+  MATCH_REASON_LABELS,
+  reasonLabel,
   evidenceEntries,
   groupTitle,
   lastErrorLabel,
@@ -14,6 +18,32 @@ import {
 } from "../src/labels.ts";
 
 describe("labels", () => {
+  it("explains every match reason and alignment status in words", () => {
+    const reasons = [
+      "no_overlap",
+      "single_source",
+      "start_delta_too_large",
+      "gps_too_far",
+      "more_than_two_sources",
+      "many_to_many",
+      "overlapping_parts",
+      "overlap_below_auto",
+      "sport_mismatch",
+      "sport_unknown",
+      "gps_review_band",
+      "gps_not_comparable",
+      "alignment_large_offset",
+      "alignment_uncertain",
+      "gps_within_auto",
+      "non_gps_rule",
+    ] satisfies MatchReason[];
+    expect(Object.keys(MATCH_REASON_LABELS).sort()).toEqual([...reasons].sort());
+    expect(reasonLabel("alignment_large_offset")).toContain("more than 15 seconds");
+    expect(reasonLabel("brand_new")).toBe("brand_new");
+    expect(alignmentLabel("uncertain")).toContain("not certain");
+    expect(alignmentLabel(null)).toBe("-");
+  });
+
   it("explains park reasons and events, falling back to the raw code", () => {
     expect(parkLabel("deletion_switch_off")).toBe(
       "Parked: deletion is off, so both originals were left in place on Strava",

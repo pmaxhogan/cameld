@@ -65,6 +65,11 @@ describe("ReviewView", () => {
     }
     expect(byTestId("track-notes")?.textContent).toContain("merge preview unavailable");
     expect(byTestId("review-metrics")?.textContent).toContain("93%");
+    // The measured best fit is prefilled, so a plain approve corrects the clock.
+    expect((byTestId("review-offset") as HTMLInputElement).value).toBe("3");
+    expect(byTestId("review-alignment")?.textContent).toContain("3 s behind the phone");
+    expect(byTestId("review-reasons")?.textContent).toContain("not quite close enough");
+    expect(byTestId("review-reasons")?.textContent).toContain("gps_far");
 
     setValue("review-offset", "abc");
     click("approve-button");

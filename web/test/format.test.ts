@@ -44,6 +44,8 @@ describe("format", () => {
       p90: "20 m",
       alignStatus: "uncertain",
       alignOffset: "0 s",
+      bestOffset: "3 s",
+      suggestedOffset: 3,
       sharpness: "1.23",
       reasons: ["alignment_uncertain", "gps_far"],
     });
@@ -56,6 +58,7 @@ describe("format", () => {
       expect(view.overlap).toBe("-");
       expect(view.alignStatus).toBe("-");
       expect(view.reasons).toEqual([]);
+      expect(view.suggestedOffset).toBe(0);
     }
   });
 
