@@ -49,6 +49,8 @@ export class FakeWebSession implements StravaWebSession {
   photoFails = false;
   /** attachPhoto succeeds but the photo is not listed afterwards. */
   photoUnverified = false;
+  /** attachPhoto attaches, but the form re-read does not list it yet (lag). */
+  photoFormLag = false;
   /** exportOriginal fails with a timeout (the export is deferred). */
   exportFails = false;
   /** getEditForm fails (the form is not hydrated). */
@@ -187,7 +189,7 @@ export class FakeWebSession implements StravaWebSession {
     if (!this.photoUnverified) {
       a.photos.push({ uniqueId: uuid, bytes: photo.bytes, createdAt: photo.takenAt.toISOString() });
     }
-    return { uuid, verified: !this.photoUnverified };
+    return { uuid, verified: !this.photoUnverified && !this.photoFormLag };
   }
 
   disconnect(): Promise<void> {

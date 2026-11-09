@@ -73,8 +73,16 @@ Delete notes:
   the file is), exactly once (names are matched case-insensitively), and
   never sets `Host` (the browser derives it from the URL). An answer naming
   another method is refused before anything is uploaded.
-- Still awaiting its first successful live upload: the full attach (the
-  upload itself and the form save), and photo removal.
+- `taken_at` is epoch milliseconds as a JSON number: the edit page sends
+  `File.lastModified`. An ISO string is accepted but read as its leading
+  year in seconds (every photo dated 1970-01-01T00:33:xx), so it is never
+  sent. The millisecond form is read from the edit page bundle; the first
+  live attach with it is still to confirm the stored date.
+- The full attach (upload and form save) works live. The edit form re-read
+  right after the save can lag and miss a just-attached photo, so a miss is
+  checked against the API photos list (`unique_id` is the uuid we chose)
+  for a few seconds before the photo is flagged. The attach is never
+  re-sent. Photo removal is still unverified.
 - The upload host is not strava.com, so its answers are never read as a
   login redirect or a challenge and never pause the web gate. Any non-2xx is
   a `WebUnexpectedResponseError` "photo upload host returned <status>
@@ -254,9 +262,10 @@ any API confirmation, so the lags overlap. See ARCHITECTURE.md section 5,
 - The athlete-menu selector used for "logged in" (`athleteMenuSelector`).
 - The login page selectors and submitting each step with Enter.
 - Photo upload: the `/photos/metadata` body (`media_type: 1`,
-  `location: null`) and its answer are verified; the upload to the presigned
-  host and whether the edit form lists the new photo afterwards (reported as
-  `verified`) await the first successful live upload.
+  `location: null`, `taken_at` in epoch ms), its answer, the upload to the
+  presigned host and the form save are verified live. The form re-read
+  afterwards can miss the new photo; the state machine then confirms it
+  through the API photos list.
 
 ### Tests
 

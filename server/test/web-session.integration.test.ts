@@ -786,7 +786,8 @@ describe("photos", () => {
     expect(metadata?.body).toMatchObject({
       athlete_id: SYNTHETIC_ATHLETE_ID,
       uuid: result.uuid,
-      taken_at: "2030-04-01T06:05:00.000Z",
+      // Epoch ms as a number, like the edit page's File.lastModified.
+      taken_at: Date.UTC(2030, 3, 1, 6, 5, 0),
     });
     const upload = fake.requests.find(
       (r) => r.method === "PUT" && r.path === `/upload-bucket/${result.uuid}`,

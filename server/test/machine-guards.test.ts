@@ -311,6 +311,7 @@ describe("freeze on failure", () => {
         updateActivity: (id: number, f: never) => h.client.updateActivity(id, f),
         getUpload: (id: number) => h.client.getUpload(id),
         waitForUpload: (u: never, o?: never) => h.client.waitForUpload(u, o),
+        getActivityPhotos: (id: number, size?: number) => h.client.getActivityPhotos(id, size),
         createUpload: () => Promise.reject(new StravaApiError(400, "/uploads", "bad request")),
       },
     });

@@ -744,10 +744,10 @@ export class WebSession implements StravaWebSession {
   }
 
   /**
-   * Attach a photo the way the edit page's JS does. The metadata call and
-   * its answer are verified live; UNVERIFIED until the first successful real
-   * upload (docs/STRAVA-WEB.md): the upload to the presigned host, and
-   * whether the edit form lists the new photo afterwards (hence `verified`).
+   * Attach a photo the way the edit page's JS does (docs/STRAVA-WEB.md).
+   * `verified` is whether the edit form re-read right after the save lists
+   * the new photo; that read can lag, so a false here is not proof the
+   * attach failed (the state machine checks the API photos list).
    *
    * 1. `PUT /photos/metadata` -> `{uri, header}`
    * 2. `PUT <uri>` with the bytes and the returned headers (`uploadHeaders`:
@@ -775,7 +775,10 @@ export class WebSession implements StravaWebSession {
             text: JSON.stringify({
               athlete_id: photo.athleteId,
               uuid,
-              taken_at: photo.takenAt.toISOString(),
+              // Epoch milliseconds as a JSON number, as the edit page sends
+              // File.lastModified. An ISO string is read as its leading year
+              // (e.g. 2026 seconds after the epoch).
+              taken_at: photo.takenAt.getTime(),
               media_type: 1,
               location: null,
             }),

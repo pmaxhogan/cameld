@@ -117,7 +117,16 @@ export type MachineApi = Pick<
   | "createUpload"
   | "getUpload"
   | "waitForUpload"
+  | "getActivityPhotos"
 >;
+
+/**
+ * How long to look for a just-attached photo in the API photos list when the
+ * edit form re-read right after the save does not list it yet (the form can
+ * lag the attach by a few seconds).
+ */
+const PHOTO_CONFIRM_ATTEMPTS = 4;
+const PHOTO_CONFIRM_INTERVAL_MS = 2000;
 
 export interface MachineOptions {
   db: DatabaseSync;
@@ -1233,9 +1242,31 @@ export class MergeMachine {
   }
 
   /**
+   * Whether the API photos list of `activityId` holds `uuid` (the unique_id
+   * the attach chose), polled for a few seconds. A failed read counts as not
+   * listed: the caller then flags the photo, it never re-sends it.
+   */
+  async #photoListed(activityId: number, uuid: string): Promise<boolean> {
+    for (let attempt = 1; attempt <= PHOTO_CONFIRM_ATTEMPTS; attempt += 1) {
+      try {
+        const photos = await this.#api.getActivityPhotos(activityId, 100);
+        if (photos.some((p) => String(p.unique_id) === uuid)) return true;
+      } catch (error) {
+        this.#log?.warn(
+          { activityId, attempt, errorClass: (error as Error).name, err: error },
+          "photo check: API photos list failed",
+        );
+      }
+      if (attempt < PHOTO_CONFIRM_ATTEMPTS) await this.#clock.sleep(PHOTO_CONFIRM_INTERVAL_MS);
+    }
+    return false;
+  }
+
+  /**
    * Re-attach every backed-up photo, best effort (L14). An attach that was
    * sent is never repeated (it could duplicate the photo); a failure flags
-   * the pair and the photo stays archived in the backup.
+   * the pair and the photo stays archived in the backup. A photo the edit
+   * form does not list yet is confirmed through the API photos list first.
    */
   async #attachPhotos(
     group: GroupRow,
@@ -1269,11 +1300,20 @@ export class MergeMachine {
           const result = await this.#web.run((s) =>
             s.attachPhoto(merged, { bytes, contentType, takenAt, athleteId }),
           );
-          finishWrite(this.#db, writeId, "done", result, this.#now());
+          // The attach was sent: from here on it is never repeated, only checked.
+          const confirmedByApi = !result.verified && (await this.#photoListed(merged, result.uuid));
+          const verified = result.verified || confirmedByApi;
+          finishWrite(
+            this.#db,
+            writeId,
+            "done",
+            { ...result, verified, ...(confirmedByApi ? { confirmedBy: "api" } : {}) },
+            this.#now(),
+          );
           attached += 1;
-          if (!result.verified) flagged = true;
+          if (!verified) flagged = true;
           this.#log?.info(
-            { groupId: group.id, activityId: merged, from: id, writeId, verified: result.verified },
+            { groupId: group.id, activityId: merged, from: id, writeId, verified, confirmedByApi },
             "photo re-attached",
           );
         } catch (error) {

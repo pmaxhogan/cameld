@@ -158,6 +158,47 @@ describe("path A (hide first)", () => {
     h.session.photoUnverified = true;
     addOuting(h.world, { withPhoto: true });
     await h.poller.poll();
-    expect(listGroups(h.db)[0]?.photosFlagged).toBe(true);
+    const [group] = listGroups(h.db);
+    expect(group?.photosFlagged).toBe(true);
+    // Neither the form nor the API lists it: flagged, and never sent twice.
+    expect(h.session.calls.filter((c) => c.op === "attach_photo")).toHaveLength(1);
+    expect(writesFor(h.db, { groupId: group!.id, kind: "photo" })).toMatchObject([
+      { status: "done", result: { verified: false } },
+    ]);
+  });
+
+  it("confirms a photo the edit form does not list yet through the API photos list", async () => {
+    h = await acceptingHarness();
+    h.session.photoFormLag = true;
+    addOuting(h.world, { withPhoto: true });
+    await h.poller.poll();
+    const [group] = listGroups(h.db);
+    expect(group?.status).toBe("hidden");
+    expect(group?.photosFlagged).toBe(false);
+    expect(h.notifier.kinds()).not.toContain("photos_flagged");
+    expect(h.session.calls.filter((c) => c.op === "attach_photo")).toHaveLength(1);
+    expect(writesFor(h.db, { groupId: group!.id, kind: "photo" })).toMatchObject([
+      { status: "done", result: { verified: true, confirmedBy: "api" } },
+    ]);
+  });
+
+  it("flags, and never re-sends, a lagging photo when the API photos list cannot be read", async () => {
+    h = await acceptingHarness();
+    h.session.photoFormLag = true;
+    // Only the confirmation read (size 100); the backup reads size 5000.
+    h.fault = (method, url) =>
+      method === "GET" && url.pathname.endsWith("/photos") && url.searchParams.get("size") === "100"
+        ? "fail_before_send"
+        : null;
+    addOuting(h.world, { withPhoto: true });
+    await h.poller.poll();
+    const [group] = listGroups(h.db);
+    expect(group?.status).toBe("hidden");
+    expect(group?.photosFlagged).toBe(true);
+    expect(h.freeze.isFrozen()).toBe(false);
+    expect(h.session.calls.filter((c) => c.op === "attach_photo")).toHaveLength(1);
+    expect(writesFor(h.db, { groupId: group!.id, kind: "photo" })).toMatchObject([
+      { status: "done", result: { verified: false } },
+    ]);
   });
 });
