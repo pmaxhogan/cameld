@@ -6,7 +6,7 @@ import { ConfigError, loadConfig } from "./config.ts";
 import { migrate, openDatabase } from "./db.ts";
 import { createBootLogger, createLogger } from "./logging.ts";
 import { createRelayClient } from "./relay/client.ts";
-import { Backfill } from "./service/backfill.ts";
+import { Backfill, batchNotification } from "./service/backfill.ts";
 import { BackupService } from "./service/backup.ts";
 import { ReadBudget } from "./service/budget.ts";
 import { Metrics } from "./service/metrics.ts";
@@ -149,21 +149,13 @@ async function main(): Promise<void> {
     poller = new Poller({ db, api, backup, machine, web, settings, clock, limiter, metrics, log });
     poller.start();
     runBackfill = (): void => {
+      if (backfill === null) return;
+      const wasDone = backfill.progress().done;
       void backfill
-        ?.runBatch()
+        .runBatch()
         .then(async (result) => {
-          if (result.activities > 0 || result.stopped === "done") {
-            await notifySafely(
-              notifier,
-              {
-                kind: "backfill_batch",
-                level: result.stopped === "error" ? "warning" : "info",
-                title: "Backfill batch finished",
-                body: `${String(result.activities)} activities, ${String(result.groups)} groups (${result.mode}, stopped: ${result.stopped})`,
-              },
-              log,
-            );
-          }
+          const notification = batchNotification(result, wasDone);
+          if (notification !== null) await notifySafely(notifier, notification, log);
         })
         .catch((error: unknown) => log.error({ err: error }, "backfill failed"));
     };

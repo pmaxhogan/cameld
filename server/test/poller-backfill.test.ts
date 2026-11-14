@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Backfill } from "../src/service/backfill.ts";
+import { Backfill, batchNotification } from "../src/service/backfill.ts";
 import { getActivity, listGroups } from "../src/state/repo.ts";
 import { addOuting, addSingle } from "./fixtures/synthetic-outings.ts";
 import { createHarness, type Harness } from "./machine-harness.ts";
@@ -161,7 +161,14 @@ describe("Backfill", () => {
     expect(second.stopped).toBe("done");
     expect(h.backfill.progress()).toMatchObject({ done: true, activities: 8 });
     expect(listGroups(h.db)).toEqual([]);
-    expect(await h.backfill.runBatch()).toMatchObject({ stopped: "done", activities: 0 });
+    expect(batchNotification(second, false)).toMatchObject({ kind: "backfill_batch" });
+    // A finished walk is idle: later ticks are not batches and never notify.
+    const lastBatch = h.backfill.lastBatch();
+    const wasDone = h.backfill.progress().done;
+    const idle = await h.backfill.runBatch();
+    expect(idle).toMatchObject({ stopped: "done", activities: 0 });
+    expect(batchNotification(idle, wasDone)).toBeNull();
+    expect(h.backfill.lastBatch()).toBe(lastBatch);
     expect(await h.metrics.render()).toContain("cameld_backfill_done 1");
     h.backfill.reset();
     expect(h.backfill.progress().done).toBe(false);

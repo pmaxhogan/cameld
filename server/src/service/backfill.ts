@@ -18,6 +18,7 @@ import type { Clock } from "../strava/rate-limiter.ts";
 import type { BackupService } from "./backup.ts";
 import { BudgetExhaustedError, type BudgetWindow, type ReadBudget } from "./budget.ts";
 import type { BackfillProgress } from "./metrics.ts";
+import type { Notification } from "./notifier.ts";
 
 /**
  * Backfill (ARCHITECTURE.md section 6): walks the whole history newest to
@@ -64,6 +65,23 @@ export interface BatchResult {
   activities: number;
   groups: number;
   error: string | null;
+}
+
+/**
+ * The owner notification for a batch, or null when it deserves none. A batch
+ * is announced when it backed something up or when it is the one that reached
+ * the end of the history. `wasDone` is progress().done from before the batch:
+ * once the walk is done every later tick also reports "done" with nothing
+ * processed, and announcing those would notify on every timer tick forever.
+ */
+export function batchNotification(result: BatchResult, wasDone: boolean): Notification | null {
+  if (result.activities === 0 && (result.stopped !== "done" || wasDone)) return null;
+  return {
+    kind: "backfill_batch",
+    level: result.stopped === "error" ? "warning" : "info",
+    title: "Backfill batch finished",
+    body: `${String(result.activities)} activities, ${String(result.groups)} groups (${result.mode}, stopped: ${result.stopped})`,
+  };
 }
 
 export interface DryRunEntry {
@@ -154,6 +172,12 @@ export class Backfill {
       const stopped = settings.paused ? "paused" : "running";
       this.#log?.debug({ mode, reason: stopped }, "backfill batch not started");
       return { ...result, stopped };
+    }
+    if (this.progress().done) {
+      // The walk already reached the oldest activity: this tick is not a batch.
+      // It must not log, rewrite the report or replace the last real batch.
+      this.#log?.debug({ mode }, "backfill already done");
+      return { ...result, stopped: "done" };
     }
     this.#running = true;
     const { db, api, backup, budget, clock } = this.#o;
