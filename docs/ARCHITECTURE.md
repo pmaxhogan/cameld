@@ -68,6 +68,12 @@ cameld is a Node.js/TypeScript service that:
     as a number. Id lists (`app_ids`, `fitbit_ids`, `deleted_ids`) are JSON
     arrays of strings; rows from before this rule hold (still exact) numbers
     and read as the same ids.
+  - `activities` is a WITHOUT ROWID table (migration 0006). As the INTEGER
+    PRIMARY KEY of a rowid table the activity id was the rowid, so one insert
+    made it the connection's `last_insert_rowid`, which node:sqlite reports
+    from every later `statement.run()` and (from Node 26.13) throws on when
+    it does not fit a number: a single 64-bit id would have failed every
+    following write. No other table may use a Strava id as its rowid.
   - Ids are ordered numerically (`compareStravaIds`), never as text: the group
     id, and with it the merge's `external_id`, is a hash of the members in
     that order, so it must not change.

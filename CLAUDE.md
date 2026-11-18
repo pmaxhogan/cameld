@@ -92,7 +92,13 @@ period. The body explains why. Architecture deviations are noted in the body.
   `Number()`, `parseInt` or arithmetic on an id, no `response.json()` or bare
   `JSON.parse` on a Strava body (use `parseStravaJson`), order ids with
   `compareStravaIds`, and read id columns through `exactRows` in
-  `state/repo.ts`. See docs/ARCHITECTURE.md section 3.
+  `state/repo.ts`. Never make a Strava id the rowid of a table (`INTEGER
+PRIMARY KEY` without `WITHOUT ROWID`). See docs/ARCHITECTURE.md section 3.
+- CI and the image run the newest Node 26.x, which can differ from the local
+  `.node-version` in node:sqlite behaviour. Before a push that touches SQLite,
+  run the server tests on the image's Node too (the browser-driven
+  `*.integration.test.ts` files are left out: that image has no Chromium):
+  `docker run --rm -v "$PWD":/src:ro node:26-bookworm-slim sh -c 'mkdir /w && cd /src && tar --exclude=node_modules --exclude=.git --exclude=dist -cf - . | tar -xf - -C /w && cd /w && npm ci && npx vitest run --project server --project shared --exclude "**/*.integration.test.ts"'`.
 
 ## Relay (relay/)
 

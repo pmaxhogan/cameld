@@ -32,6 +32,7 @@ describe("migrate", () => {
       "0003_merge_state.sql",
       "0004_ui.sql",
       "0005_original_retries.sql",
+      "0006_activities_without_rowid.sql",
     ]);
     expect(migrate(db, MIGRATIONS_DIR)).toEqual([]);
     db.prepare("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)").run(
@@ -47,7 +48,7 @@ describe("migrate", () => {
   it("creates the database file and parent directories on disk", () => {
     const path = join(tempDir(), "nested", "state", "cameld.db");
     const db = openDatabase(path);
-    expect(migrate(db, MIGRATIONS_DIR)).toHaveLength(5);
+    expect(migrate(db, MIGRATIONS_DIR)).toHaveLength(6);
     db.close();
   });
 

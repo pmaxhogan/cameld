@@ -134,9 +134,9 @@ describe("64-bit ids in SQLite", () => {
     const db = memoryDb();
     expect(() =>
       upsertActivity(db, summary("9223372036854775808", "2020-02-02T10:00:00Z"), 1),
-    ).toThrow(/datatype mismatch/);
+    ).toThrow(/cannot store (REAL|TEXT) value in INTEGER column/);
     expect(() => upsertActivity(db, summary("12abc", "2020-02-02T10:00:00Z"), 1)).toThrow(
-      /datatype mismatch/,
+      /cannot store (REAL|TEXT) value in INTEGER column/,
     );
     expect(db.prepare("SELECT count(*) AS n FROM activities").get()).toEqual({ n: 0 });
     db.close();
