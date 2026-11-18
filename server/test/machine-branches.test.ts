@@ -1,3 +1,4 @@
+import type { StravaId } from "@cameld/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { Poller } from "../src/service/poller.ts";
 import {
@@ -113,7 +114,7 @@ describe("machine branches", () => {
     h.world.duplicatePolicy = () => null;
     const outcome = await h.machine.restoreActivity(single.id);
     expect(outcome).toMatchObject({ status: "restored", flags: [] });
-    const restored = h.world.get((outcome as { newId: number }).newId)!;
+    const restored = h.world.get((outcome as { newId: StravaId }).newId)!;
     expect(restored.hideFromHome).toBe(true);
     expect(restored.privateNote).toBe("");
   });

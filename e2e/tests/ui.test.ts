@@ -53,10 +53,10 @@ test("history: event timeline, evidence and the restore action", async ({ signed
   await expect(detail).toBeVisible();
   await expect(page.getByTestId("event-item")).toHaveCount(12);
   await expect(page.getByTestId("event-timeline")).toContainText("confirmed");
-  await expect(page.getByTestId("members-table")).toContainText("9000000201");
+  await expect(page.getByTestId("members-table")).toContainText("9100000000000000201");
   await expect(page.getByTestId("member-link").first()).toHaveAttribute(
     "href",
-    "https://www.strava.com/activities/9000000201",
+    "https://www.strava.com/activities/9100000000000000201",
   );
   await expect(page.getByTestId("group-title")).toContainText("Run, 1 phone + 1 wrist");
   await expect(page.getByTestId("group-id")).toHaveText(SEED.doneGroup);

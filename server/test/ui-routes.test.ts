@@ -1,3 +1,4 @@
+import type { StravaId } from "@cameld/shared";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,7 +45,7 @@ const gate: Gate = {
 };
 const H = { "x-requested-with": "cameld", "content-type": "application/json" };
 
-function activity(id: number, source: "app" | "fitbit") {
+function activity(id: StravaId, source: "app" | "fitbit") {
   return {
     id,
     name: source === "app" ? "Synthetic Run" : "Synthetic Wrist Run",
@@ -57,34 +58,46 @@ function activity(id: number, source: "app" | "fitbit") {
 }
 
 function seed(db: DatabaseSync): void {
-  upsertActivity(db, activity(101, "app") as never, T0);
-  upsertActivity(db, activity(102, "fitbit") as never, T0);
-  upsertActivity(db, activity(201, "app") as never, T0);
-  upsertActivity(db, activity(202, "fitbit") as never, T0);
+  upsertActivity(db, activity("9100000000000000101", "app") as never, T0);
+  upsertActivity(db, activity("9100000000000000102", "fitbit") as never, T0);
+  upsertActivity(db, activity("9100000000000000201", "app") as never, T0);
+  upsertActivity(db, activity("9100000000000000202", "fitbit") as never, T0);
   insertGroup(
     db,
     {
       id: "g-review",
-      appIds: [101],
-      fitbitIds: [102],
+      appIds: ["9100000000000000101"],
+      fitbitIds: ["9100000000000000102"],
       startMs: T0,
     },
     T0,
   );
-  patchGroup(db, "g-review", { status: "review", match: { appIds: [101], metrics: null } }, T0);
+  patchGroup(
+    db,
+    "g-review",
+    { status: "review", match: { appIds: ["9100000000000000101"], metrics: null } },
+    T0,
+  );
   insertGroup(
     db,
     {
       id: "g-done",
-      appIds: [201],
-      fitbitIds: [202],
+      appIds: ["9100000000000000201"],
+      fitbitIds: ["9100000000000000202"],
       startMs: T0 + 86_400_000,
     },
     T0,
   );
-  patchGroup(db, "g-done", { status: "done", mergedActivityId: 999, hiddenAt: T0 }, T0);
-  appendEvent(db, "g-done", T0, "hidden", "done", "confirmed", { gone: [201, 202] });
-  beginWrite(db, { groupId: "g-done", kind: "delete", targetId: 201 }, T0);
+  patchGroup(
+    db,
+    "g-done",
+    { status: "done", mergedActivityId: "9100000000000000999", hiddenAt: T0 },
+    T0,
+  );
+  appendEvent(db, "g-done", T0, "hidden", "done", "confirmed", {
+    gone: ["9100000000000000201", "9100000000000000202"],
+  });
+  beginWrite(db, { groupId: "g-done", kind: "delete", targetId: "9100000000000000201" }, T0);
 }
 
 interface Setup {
@@ -118,7 +131,7 @@ async function setup(
         groupId: id,
         status: "restored",
         restored: [],
-        unhidden: [201],
+        unhidden: ["9100000000000000201"],
         flags: [],
       });
     },
@@ -226,11 +239,14 @@ describe("read routes", () => {
     expect(done.map((g: { id: string }) => g.id)).toEqual(["g-done"]);
     const detail = (await app.inject({ url: "/api/groups/g-done" })).json();
     expect(detail.restorable).toBe(true);
-    expect(detail.members.map((m: { id: number }) => m.id)).toEqual([201, 202]);
+    expect(detail.members.map((m: { id: string }) => m.id)).toEqual([
+      "9100000000000000201",
+      "9100000000000000202",
+    ]);
     expect(detail.events.at(-1).event).toBe("confirmed");
     expect(detail.writes[0]).toMatchObject({
       kind: "delete",
-      targetId: 201,
+      targetId: "9100000000000000201",
       externalId: null,
       status: "intent",
     });
@@ -253,9 +269,9 @@ describe("read routes", () => {
 
   it("shows a member that is missing from the activity table as absent", async () => {
     const { app, db } = await setup();
-    db.prepare("DELETE FROM activities WHERE id = 202").run();
+    db.prepare("DELETE FROM activities WHERE id = 9100000000000000202").run();
     const detail = (await app.inject({ url: "/api/groups/g-done" })).json();
-    expect(detail.members.map((m: { id: number }) => m.id)).toEqual([201]);
+    expect(detail.members.map((m: { id: string }) => m.id)).toEqual(["9100000000000000201"]);
   });
 
   it("says when the merge is built and names an upload's external_id", async () => {
@@ -413,12 +429,24 @@ describe("write routes", () => {
         headers: H,
         payload: JSON.stringify(body),
       });
-    expect((await restore("g-done")).json()).toMatchObject({ status: "restored", unhidden: [201] });
+    expect((await restore("g-done")).json()).toMatchObject({
+      status: "restored",
+      unhidden: ["9100000000000000201"],
+    });
     expect(s.restores).toEqual([`synthetic restore (by ${OWNER})`]);
     expect((await restore("g-review")).json().error).toBe("not_restorable");
     expect((await restore("nope")).statusCode).toBe(404);
     expect((await restore("g-done", { reason: "" })).statusCode).toBe(400);
-    insertGroup(s.db, { id: "g-boom", appIds: [201], fitbitIds: [202], startMs: T0 }, T0);
+    insertGroup(
+      s.db,
+      {
+        id: "g-boom",
+        appIds: ["9100000000000000201"],
+        fitbitIds: ["9100000000000000202"],
+        startMs: T0,
+      },
+      T0,
+    );
     const boom = await restore("g-boom");
     expect(boom.statusCode).toBe(500);
     expect(boom.json()).toEqual({ error: "internal_error" });

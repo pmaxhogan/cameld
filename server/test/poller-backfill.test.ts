@@ -1,3 +1,4 @@
+import type { StravaId } from "@cameld/shared";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -20,7 +21,7 @@ describe("Poller", () => {
     const outing = addOuting(h.world, { withPhoto: true });
     const first = await h.poller.poll();
     expect(first).toMatchObject({ skipped: false, listed: 2, backedUp: 2, groups: 1, error: null });
-    const kinds = (id: number) =>
+    const kinds = (id: StravaId) =>
       (
         h.db
           .prepare("SELECT kind FROM backup_files WHERE activity_id = ? ORDER BY kind")

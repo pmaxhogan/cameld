@@ -1,3 +1,4 @@
+import type { StravaId } from "@cameld/shared";
 import { DeletionAuthorization } from "../../src/web/deletion-authorization.ts";
 import {
   ChallengeError,
@@ -55,20 +56,20 @@ export class FakeWebSession implements StravaWebSession {
   exportFails = false;
   /** getEditForm fails (the form is not hydrated). */
   formFails = false;
-  readonly calls: { op: string; id?: number }[] = [];
-  readonly deleted: number[] = [];
+  readonly calls: { op: string; id?: StravaId }[] = [];
+  readonly deleted: StravaId[] = [];
 
   constructor(world: FakeWorld, now: () => number) {
     this.#world = world;
     this.#now = now;
   }
 
-  #check(op: string, id?: number): void {
+  #check(op: string, id?: StravaId): void {
     this.calls.push(id === undefined ? { op } : { op, id });
     if (!this.loggedIn) throw new LoginRequiredError(`${op}: login required`);
   }
 
-  #activity(id: number): WorldActivity {
+  #activity(id: StravaId): WorldActivity {
     const activity = this.#world.get(id);
     if (activity === undefined) throw new WebNotFoundError(`/activities/${id}`);
     return activity;
@@ -105,7 +106,7 @@ export class FakeWebSession implements StravaWebSession {
     return Promise.resolve();
   }
 
-  async exportOriginal(activityId: number): Promise<ExportedFile> {
+  async exportOriginal(activityId: StravaId): Promise<ExportedFile> {
     this.#check("export_original", activityId);
     if (this.exportFails) throw new WebTimeoutError("export_original", 1);
     const original = this.#activity(activityId).original;
@@ -121,7 +122,7 @@ export class FakeWebSession implements StravaWebSession {
     return Promise.reject(new Error("not used by the state machine"));
   }
 
-  async getEditForm(activityId: number): Promise<EditForm> {
+  async getEditForm(activityId: StravaId): Promise<EditForm> {
     this.#check("edit_form", activityId);
     if (this.formFails) throw new WebNotReadyError(`/activities/${activityId}/edit`, ["x"], "test");
     const a = this.#activity(activityId);
@@ -135,14 +136,14 @@ export class FakeWebSession implements StravaWebSession {
     };
   }
 
-  async setVisibility(activityId: number, visibility: Visibility): Promise<EditFormValues> {
+  async setVisibility(activityId: StravaId, visibility: Visibility): Promise<EditFormValues> {
     this.#check("set_visibility", activityId);
     const a = this.#activity(activityId);
     a.visibility = visibility;
     return this.#values(a);
   }
 
-  async setPrivateNote(activityId: number, text: string): Promise<EditFormValues> {
+  async setPrivateNote(activityId: StravaId, text: string): Promise<EditFormValues> {
     this.#check("set_private_note", activityId);
     const a = this.#activity(activityId);
     a.privateNote = text;
@@ -150,7 +151,7 @@ export class FakeWebSession implements StravaWebSession {
   }
 
   async setPerceivedExertion(
-    activityId: number,
+    activityId: StravaId,
     exertion: number | null,
     prefer = false,
   ): Promise<EditFormValues> {
@@ -161,7 +162,7 @@ export class FakeWebSession implements StravaWebSession {
     return this.#values(a);
   }
 
-  async deleteActivity(activityId: number, auth: DeletionAuthorization): Promise<DeletionResult> {
+  async deleteActivity(activityId: StravaId, auth: DeletionAuthorization): Promise<DeletionResult> {
     this.calls.push({ op: "delete", id: activityId });
     DeletionAuthorization.consume(auth, activityId, this.#now());
     if (!this.loggedIn) throw new LoginRequiredError("delete: login required");
@@ -181,7 +182,7 @@ export class FakeWebSession implements StravaWebSession {
     return Promise.reject(new Error("not used by the state machine"));
   }
 
-  async attachPhoto(activityId: number, photo: AttachPhotoInput): Promise<AttachPhotoResult> {
+  async attachPhoto(activityId: StravaId, photo: AttachPhotoInput): Promise<AttachPhotoResult> {
     this.#check("attach_photo", activityId);
     if (this.photoFails) throw new WebUnexpectedResponseError("photo upload refused");
     const a = this.#activity(activityId);

@@ -1,9 +1,11 @@
 import { gunzipSync } from "node:zlib";
 import {
   type ActivitySample,
+  compareStravaIds,
   readFitActivity,
   readGpxActivity,
   readTcxActivity,
+  type StravaId,
 } from "@cameld/shared";
 import { mergeFigures } from "../../src/state/build.ts";
 import type { Visibility } from "../../src/web/forms.ts";
@@ -19,7 +21,19 @@ import type { Visibility } from "../../src/web/forms.ts";
  * HTML naming the Strava app copy: `duplicate of <a href='/activities/N'>`.
  */
 
-export const FAKE_ATHLETE_ID = 515151;
+/**
+ * Made-up ids all sit ABOVE 2^53 (9007199254740992), like the 64-bit ids
+ * Strava is moving to: a JavaScript number cannot hold them, so any code path
+ * that still routes an id through a number breaks a test.
+ */
+export const FAKE_ATHLETE_ID: StravaId = "9100000000000515151";
+const FIRST_ACTIVITY_ID = 9_100_000_000_009_400_001n;
+const FIRST_UPLOAD_ID = 9_100_000_000_077_000_001n;
+
+/** The upload id the fake reports for an activity made from a file. */
+export function uploadIdOf(activityId: StravaId): StravaId {
+  return (BigInt(activityId) + 500_000n).toString();
+}
 
 export interface WorldPhoto {
   uniqueId: string;
@@ -28,7 +42,7 @@ export interface WorldPhoto {
 }
 
 export interface WorldActivity {
-  id: number;
+  id: StravaId;
   name: string;
   description: string | null;
   sportType: string;
@@ -56,11 +70,11 @@ export interface WorldActivity {
 }
 
 export interface WorldUpload {
-  id: number;
+  id: StravaId;
   externalId: string;
   status: "processing" | "ready" | "error";
   error: string | null;
-  activityId: number | null;
+  activityId: StravaId | null;
   /** Polls left before the upload leaves "processing". */
   pollsLeft: number;
 }
@@ -69,7 +83,7 @@ export type DuplicatePolicy = (incoming: {
   startMs: number;
   endMs: number;
   externalId: string;
-}) => number | null;
+}) => StravaId | null;
 
 export function parseUploaded(bytes: Buffer, dataType: string): ActivitySample[] {
   const raw = dataType.endsWith(".gz") ? gunzipSync(bytes) : bytes;
@@ -82,10 +96,20 @@ export function parseUploaded(bytes: Buffer, dataType: string): ActivitySample[]
 }
 
 export class FakeWorld {
-  readonly activities = new Map<number, WorldActivity>();
-  readonly uploads = new Map<number, WorldUpload>();
-  nextActivityId = 9_400_001;
-  nextUploadId = 77_000_001;
+  readonly activities = new Map<StravaId, WorldActivity>();
+  readonly uploads = new Map<StravaId, WorldUpload>();
+  #nextActivityId = FIRST_ACTIVITY_ID;
+  #nextUploadId = FIRST_UPLOAD_ID;
+  /**
+   * Allocate ids the size Strava's were before the 64-bit range (11 digits or
+   * fewer), for tests about data written while ids were still numbers. Call
+   * before adding anything.
+   */
+  useLegacyIds(): void {
+    this.#nextActivityId = 9_400_001n;
+    this.#nextUploadId = 77_000_001n;
+  }
+
   /** Polls an upload stays "processing". */
   processingPolls = 1;
   /** Multiplies the distance Strava reports for uploads (tolerance tests). */
@@ -102,18 +126,18 @@ export class FakeWorld {
   /** Answer a request with this HTTP status instead (null = handle normally). */
   failStatus: ((method: string, path: string) => number | null) | undefined;
   /** Another fake (the strava.com web pages) may delete activities too. */
-  goneElsewhere: ((id: number) => boolean) | undefined;
+  goneElsewhere: ((id: StravaId) => boolean) | undefined;
   /** Called for every activity an upload creates. */
   onCreated: ((activity: WorldActivity) => void) | undefined;
   /** Replace the streams answer for an activity (tolerance tests). */
-  streamsOverride: ((id: number) => unknown) | undefined;
+  streamsOverride: ((id: StravaId) => unknown) | undefined;
 
   /** The live rule: same external id, or overlapping time; names the app copy first. */
   defaultDuplicate(incoming: {
     startMs: number;
     endMs: number;
     externalId: string;
-  }): number | null {
+  }): StravaId | null {
     const live = this.live();
     const same = live.find((a) => a.externalId === incoming.externalId);
     if (same !== undefined) return same.id;
@@ -128,7 +152,7 @@ export class FakeWorld {
     const samples = activity.samples ?? [];
     const figures = mergeFigures(samples);
     const full: WorldActivity = {
-      id: activity.id ?? this.nextActivityId++,
+      id: activity.id ?? (this.#nextActivityId++).toString(),
       description: null,
       startMs: figures.startMs,
       elapsedSeconds: figures.elapsedSeconds,
@@ -156,7 +180,7 @@ export class FakeWorld {
     return full;
   }
 
-  get(id: number): WorldActivity | undefined {
+  get(id: StravaId): WorldActivity | undefined {
     const activity = this.activities.get(id);
     return activity?.exists === true && this.goneElsewhere?.(id) !== true ? activity : undefined;
   }
@@ -170,10 +194,10 @@ export class FakeWorld {
    * true for a deleted activity, the API still serves it by id and in the
    * athlete activity list (the web pages already treat it as gone).
    */
-  apiLags: ((id: number) => boolean) | undefined;
+  apiLags: ((id: StravaId) => boolean) | undefined;
 
   /** What the API answers for an id (see `apiLags`). */
-  apiGet(id: number): WorldActivity | undefined {
+  apiGet(id: StravaId): WorldActivity | undefined {
     const activity = this.activities.get(id);
     if (activity !== undefined && !activity.exists && this.apiLags?.(id) === true) return activity;
     return this.get(id);
@@ -184,6 +208,11 @@ export class FakeWorld {
     return [...this.activities.values()].filter((a) => this.apiGet(a.id) !== undefined);
   }
 
+  /** Newest first, as the API lists activities (ties by id, numerically). */
+  static newestFirst(a: WorldActivity, b: WorldActivity): number {
+    return b.startMs - a.startMs || compareStravaIds(b.id, a.id);
+  }
+
   createUpload(input: {
     bytes: Buffer;
     dataType: string;
@@ -191,7 +220,7 @@ export class FakeWorld {
     name: string | null;
     filename: string;
   }): WorldUpload {
-    const id = this.nextUploadId++;
+    const id = (this.#nextUploadId++).toString();
     const upload: WorldUpload = {
       id,
       externalId: input.externalId,
@@ -242,7 +271,7 @@ export class FakeWorld {
   }
 
   /** What GET /uploads/:id answers (advancing processing by one poll). */
-  pollUpload(id: number): WorldUpload | undefined {
+  pollUpload(id: StravaId): WorldUpload | undefined {
     const upload = this.uploads.get(id);
     if (upload !== undefined && upload.pollsLeft > 0) upload.pollsLeft -= 1;
     return upload;

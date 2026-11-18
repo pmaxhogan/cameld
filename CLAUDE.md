@@ -87,6 +87,12 @@ period. The body explains why. Architecture deviations are noted in the body.
   one; the runner refuses a changed or missing file.
 - Credentials never appear in argv, URLs, logs, API responses, or error
   messages.
+- A Strava id (activity, athlete, upload) is a `StravaId`: a canonical decimal
+  string, never a number (ids are 64-bit and a number rounds above 2^53). No
+  `Number()`, `parseInt` or arithmetic on an id, no `response.json()` or bare
+  `JSON.parse` on a Strava body (use `parseStravaJson`), order ids with
+  `compareStravaIds`, and read id columns through `exactRows` in
+  `state/repo.ts`. See docs/ARCHITECTURE.md section 3.
 
 ## Relay (relay/)
 

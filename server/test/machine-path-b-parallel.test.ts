@@ -1,3 +1,4 @@
+import type { StravaId } from "@cameld/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { NotRestorableError } from "../src/state/machine.ts";
 import {
@@ -33,13 +34,13 @@ afterEach(async () => {
 
 const MINUTE = 60_000;
 
-function deleteCalls(harness: Harness): number[] {
-  return harness.session.calls.filter((c) => c.op === "delete").map((c) => c.id as number);
+function deleteCalls(harness: Harness): StravaId[] {
+  return harness.session.calls.filter((c) => c.op === "delete").map((c) => c.id as StravaId);
 }
 
 /** Fresh (pre-delete) backups taken, per activity id. */
-function countFreshBackups(harness: Harness): Map<number, number> {
-  const counts = new Map<number, number>();
+function countFreshBackups(harness: Harness): Map<StravaId, number> {
+  const counts = new Map<StravaId, number>();
   const original = harness.backup.backupActivity.bind(harness.backup);
   harness.backup.backupActivity = (id, options = {}) => {
     if (options.fresh === true) counts.set(id, (counts.get(id) ?? 0) + 1);
@@ -52,7 +53,7 @@ function countFreshBackups(harness: Harness): Map<number, number> {
 function afterDelete(harness: Harness, n: number, hook: () => void | Promise<void>): void {
   const original = harness.session.deleteActivity.bind(harness.session);
   let sent = 0;
-  harness.session.deleteActivity = async (id: number, auth: DeletionAuthorization) => {
+  harness.session.deleteActivity = async (id: StravaId, auth: DeletionAuthorization) => {
     const result = await original(id, auth);
     sent += 1;
     if (sent === n) await hook();
@@ -379,7 +380,7 @@ describe("path B: both deletes are sent in one step", () => {
 
 describe("multi-member sides (1-to-N)", () => {
   /** One phone recording against two wrist parts of the same outing. */
-  async function oneToTwo(settings = {}): Promise<{ ids: number[]; group: GroupRow }> {
+  async function oneToTwo(settings = {}): Promise<{ ids: StravaId[]; group: GroupRow }> {
     h = await createHarness({ settings });
     const outing = addOuting(h.world);
     outing.fitbit.exists = false;

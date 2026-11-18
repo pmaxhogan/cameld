@@ -5,7 +5,9 @@
  * ocean next to 0,0 (Null Island), far from any real route.
  */
 
-export const SYNTHETIC_ATHLETE_ID = 424242;
+import type { StravaId } from "@cameld/shared";
+
+export const SYNTHETIC_ATHLETE_ID: StravaId = "9100000000000424242";
 export const SYNTHETIC_EMAIL = "athlete@example.test";
 
 export interface FakePhoto {
@@ -16,7 +18,7 @@ export interface FakePhoto {
 }
 
 export interface FakeActivity {
-  id: number;
+  id: StravaId;
   exists: boolean;
   name: string;
   description: string;
@@ -68,8 +70,8 @@ export const SYNTHETIC_PNG = Buffer.from(
   "base64",
 );
 
-export const RUN_ID = 7000001;
-export const RIDE_ID = 7000002;
+export const RUN_ID: StravaId = "9100000000000700001";
+export const RIDE_ID: StravaId = "9100000000000700002";
 
 export function syntheticActivities(): FakeActivity[] {
   const runGpx = syntheticGpx("Quillmere Canal Run", "2030-04-01T06:00:00Z");

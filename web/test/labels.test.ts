@@ -83,14 +83,26 @@ describe("labels", () => {
   });
 
   it("builds Strava links and group titles", () => {
-    expect(stravaActivityUrl(42)).toBe("https://www.strava.com/activities/42");
+    expect(stravaActivityUrl("9100000000000000042")).toBe(
+      "https://www.strava.com/activities/9100000000000000042",
+    );
     const start = new Date(2031, 4, 6, 7, 8).getTime();
-    expect(groupTitle({ startMs: start, sportType: "Ride", appIds: [1, 2], fitbitIds: [3] })).toBe(
-      "2031-05-06 Ride, 2 phone + 1 wrist recordings",
-    );
-    expect(groupTitle({ startMs: start, sportType: null, appIds: [], fitbitIds: [3] })).toBe(
-      "2031-05-06 Activity, 0 phone + 1 wrist recording",
-    );
+    expect(
+      groupTitle({
+        startMs: start,
+        sportType: "Ride",
+        appIds: ["9100000000000000001", "9100000000000000002"],
+        fitbitIds: ["9100000000000000003"],
+      }),
+    ).toBe("2031-05-06 Ride, 2 phone + 1 wrist recordings");
+    expect(
+      groupTitle({
+        startMs: start,
+        sportType: null,
+        appIds: [],
+        fitbitIds: ["9100000000000000003"],
+      }),
+    ).toBe("2031-05-06 Activity, 0 phone + 1 wrist recording");
   });
 
   it("flattens evidence into readable rows", () => {

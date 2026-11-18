@@ -1,4 +1,5 @@
 export * from "./health.ts";
+export * from "./strava-id.ts";
 export * from "./activity/sample.ts";
 export * from "./fit/quantization.ts";
 export * from "./fit/write.ts";

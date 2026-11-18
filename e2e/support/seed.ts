@@ -9,7 +9,7 @@
  */
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { type ActivitySample, writeFitActivity } from "@cameld/shared";
+import { type ActivitySample, type StravaId, writeFitActivity } from "@cameld/shared";
 import { writeOnce } from "../../server/dist/backup-store.js";
 import { migrate, openDatabase } from "../../server/dist/db.js";
 import {
@@ -56,8 +56,8 @@ function loop(
 }
 
 interface Pair {
-  appId: number;
-  fitbitId: number;
+  appId: StravaId;
+  fitbitId: StravaId;
   start: number;
 }
 
@@ -141,7 +141,11 @@ export async function seed(dataDir: string): Promise<void> {
   const root = join(dataDir, "backup");
 
   // 1. A borderline pair waiting for review.
-  const review: Pair = { appId: 9_000_000_101, fitbitId: 9_000_000_102, start: START };
+  const review: Pair = {
+    appId: "9100000000000000101",
+    fitbitId: "9100000000000000102",
+    start: START,
+  };
   await addPair(db, root, review, 35);
   insertGroup(
     db,
@@ -154,7 +158,11 @@ export async function seed(dataDir: string): Promise<void> {
   });
 
   // 2. A finished merge (originals deleted) with a full timeline.
-  const done: Pair = { appId: 9_000_000_201, fitbitId: 9_000_000_202, start: START + DAY_MS };
+  const done: Pair = {
+    appId: "9100000000000000201",
+    fitbitId: "9100000000000000202",
+    start: START + DAY_MS,
+  };
   await addPair(db, root, done, 4);
   insertGroup(
     db,
@@ -191,7 +199,7 @@ export async function seed(dataDir: string): Promise<void> {
     {
       status: "done",
       path: "A",
-      mergedActivityId: 9_000_000_299,
+      mergedActivityId: "9100000000000000299",
       hiddenAt: done.start + 8 * 60_000,
       deletedIds: [done.appId, done.fitbitId],
       match: matchSummary(done, 4),
@@ -202,7 +210,11 @@ export async function seed(dataDir: string): Promise<void> {
   setActivityFields(db, done.fitbitId, { gone_at: done.start + DAY_MS });
 
   // 3. A merge whose originals are hidden, waiting out the grace period.
-  const hidden: Pair = { appId: 9_000_000_301, fitbitId: 9_000_000_302, start: START + 2 * DAY_MS };
+  const hidden: Pair = {
+    appId: "9100000000000000301",
+    fitbitId: "9100000000000000302",
+    start: START + 2 * DAY_MS,
+  };
   await addPair(db, root, hidden, 5);
   insertGroup(
     db,
@@ -217,13 +229,22 @@ export async function seed(dataDir: string): Promise<void> {
   patchGroup(
     db,
     SEED.hiddenGroup,
-    { status: "hidden", path: "A", mergedActivityId: 9_000_000_399, hiddenAt: hidden.start },
+    {
+      status: "hidden",
+      path: "A",
+      mergedActivityId: "9100000000000000399",
+      hiddenAt: hidden.start,
+    },
     hidden.start,
   );
 
   // 4. Path B parked: the merge is built and stored, Strava rejected its
   // upload as a duplicate, and deletion is off, so both originals stay.
-  const parked: Pair = { appId: 9_000_000_401, fitbitId: 9_000_000_402, start: START + 3 * DAY_MS };
+  const parked: Pair = {
+    appId: "9100000000000000401",
+    fitbitId: "9100000000000000402",
+    start: START + 3 * DAY_MS,
+  };
   await addPair(db, root, parked, 3);
   insertGroup(
     db,

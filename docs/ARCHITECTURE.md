@@ -47,6 +47,30 @@ cameld is a Node.js/TypeScript service that:
   client tracks both and their reset windows; a rejected request still counts.
 - OAuth access tokens are short lived and refresh tokens rotate, so the newest
   refresh token is persisted on every refresh.
+- Activity, athlete and upload ids are 64-bit integers (Strava announced the
+  full range for ids generated after 2027-06-01). A JavaScript number rounds
+  anything above 2^53 - 1 without a word, so **an id is never a number in
+  cameld**: it is a canonical decimal string (`StravaId`,
+  `shared/src/strava-id.ts`) in memory, in JSON, in logs and in the UI.
+  - API bodies are parsed by `parseStravaJson` (`server/src/strava/json.ts`),
+    never `response.json()`: id fields are read from the digits of the body,
+    the `id_str` twin Strava sends is preferred where present, and any other
+    integer too large for a number is kept as its exact digits. Backups are
+    written from that parsed value, so no rounded id reaches a backup. The
+    cost is that a stored body is not byte for byte what Strava sent: an id
+    is a JSON string where Strava sent a number (the value is the same, and
+    `id_str` is kept beside it). Stored bodies are read back with the same
+    parser, so old and new backups give the same ids.
+  - SQLite keeps ids in INTEGER columns (a signed 64-bit integer, also the
+    largest id cameld accepts: a larger one is refused, not stored wrong). A
+    decimal string binds as that exact integer; reads go through `exactRows`
+    in `state/repo.ts`, because node:sqlite refuses to return such an integer
+    as a number. Id lists (`app_ids`, `fitbit_ids`, `deleted_ids`) are JSON
+    arrays of strings; rows from before this rule hold (still exact) numbers
+    and read as the same ids.
+  - Ids are ordered numerically (`compareStravaIds`), never as text: the group
+    id, and with it the merge's `external_id`, is a hash of the members in
+    that order, so it must not change.
 - Hiding, deleting, exporting original files, private notes and photo handling
   may need a strava.com web session (a headless browser) where the API cannot
   do them. This is unofficial and may break, so it is isolated behind a small

@@ -28,10 +28,10 @@ const RESTORED = {
   groupId: "g-1",
   status: "restored",
   restored: [
-    { id: 101, outcome: "reuploaded", newId: 909, flags: [] },
-    { id: 202, outcome: "unhidden", newId: null, flags: [] },
+    { id: "9100000000000000101", outcome: "reuploaded", newId: "9100000000000000909", flags: [] },
+    { id: "9100000000000000202", outcome: "unhidden", newId: null, flags: [] },
   ],
-  unhidden: [202],
+  unhidden: ["9100000000000000202"],
   flags: [],
 };
 
@@ -46,11 +46,15 @@ describe("GroupDetailView", () => {
     expect(byTestId("group-id")?.textContent).toBe("g-1");
     expect(detail.textContent).toContain("Done");
     const merged = byTestId("merged-activity")!.querySelector("a")!;
-    expect(merged.getAttribute("href")).toBe("https://www.strava.com/activities/303");
+    expect(merged.getAttribute("href")).toBe(
+      "https://www.strava.com/activities/9100000000000000303",
+    );
     expect(merged.getAttribute("target")).toBe("_blank");
     expect(detail.textContent).toContain("Phone (app)");
     const member = byTestId("member-link")!;
-    expect(member.getAttribute("href")).toBe("https://www.strava.com/activities/101");
+    expect(member.getAttribute("href")).toBe(
+      "https://www.strava.com/activities/9100000000000000101",
+    );
     const memberRow = byTestId("members-table")!.querySelector("tbody tr")!;
     expect(memberRow.lastElementChild?.textContent?.trim()).toBe("-");
     expect(byTestId("event-timeline")).not.toBeNull();
@@ -92,18 +96,29 @@ describe("GroupDetailView", () => {
             lastError: "wait:deletion_switch_off",
             mergedActivityId: null,
             sportType: null,
-            appIds: [101],
+            appIds: ["9100000000000000101"],
             fitbitIds: [],
           }),
           mergeBuilt: true,
-          members: [{ ...base.members[0]!, deviceName: null, source: "fitbit", restoredAs: 404 }],
+          members: [
+            {
+              ...base.members[0]!,
+              deviceName: null,
+              source: "fitbit",
+              restoredAs: "9100000000000000404",
+            },
+          ],
           events: [
             {
               at: 1_500_000,
               from: "snapshotted",
               to: "b_rejected",
               event: "upload_duplicate",
-              evidence: { kind: "duplicate", duplicateOf: 101, error: "duplicate of 101" },
+              evidence: {
+                kind: "duplicate",
+                duplicateOf: "9100000000000000101",
+                error: "duplicate of 9100000000000000101",
+              },
             },
             {
               at: 1_600_000,
@@ -127,7 +142,7 @@ describe("GroupDetailView", () => {
             {
               id: 3,
               kind: "hide",
-              targetId: 101,
+              targetId: "9100000000000000101",
               externalId: null,
               status: "done",
               result: null,
@@ -166,17 +181,19 @@ describe("GroupDetailView", () => {
     );
     expect(events[0]!.textContent).toContain("Snapshot taken -> Upload rejected as duplicate");
     expect(events[0]!.querySelector('[data-testid="event-evidence"]')!.textContent).toContain(
-      "duplicateOf101",
+      "duplicateOf9100000000000000101",
     );
     expect(events[1]!.textContent).toContain("Parked: deletion is off");
     const row = byTestId("members-table")!.querySelector("tbody tr")!;
     expect(row.textContent).toContain("Wrist (Fitbit)");
     expect(row.lastElementChild?.querySelector("a")?.getAttribute("href")).toBe(
-      "https://www.strava.com/activities/404",
+      "https://www.strava.com/activities/9100000000000000404",
     );
     const targets = allByTestId("write-target");
-    expect(targets.map((t) => t.textContent)).toEqual(["cameld-merge-g-1", "101"]);
-    expect(targets[1]!.getAttribute("href")).toBe("https://www.strava.com/activities/101");
+    expect(targets.map((t) => t.textContent)).toEqual(["cameld-merge-g-1", "9100000000000000101"]);
+    expect(targets[1]!.getAttribute("href")).toBe(
+      "https://www.strava.com/activities/9100000000000000101",
+    );
     const writeRows = byTestId("writes-table")!.querySelectorAll("tbody tr");
     expect(writeRows[1]!.textContent).toContain("Hide original");
     expect(writeRows[2]!.textContent).toContain("mystery");
@@ -218,8 +235,8 @@ describe("GroupDetailView", () => {
     await flushPromises();
     expect(calls.find((c) => c.method === "POST")!.body).toEqual({ reason: "wrong pair" });
     const result = byTestId("restore-result")!.textContent;
-    expect(result).toContain("101 reuploaded as 909");
-    expect(result).toContain("202 unhidden.");
+    expect(result).toContain("9100000000000000101 reuploaded as 9100000000000000909");
+    expect(result).toContain("9100000000000000202 unhidden.");
     expect(result).toContain("Flags: none");
     expect(byTestId("restore-button")).toBeNull();
   });

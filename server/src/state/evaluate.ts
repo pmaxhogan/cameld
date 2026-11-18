@@ -2,11 +2,13 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
   type ActivitySample,
+  compareStravaIds,
   evaluateGroup,
   findCandidateGroups,
   type MatchRecording,
   type MatchResult,
   type MatchSettings,
+  type StravaId,
 } from "@cameld/shared";
 import { type BackupService, parseOriginal } from "../service/backup.ts";
 import { type ActivityRow, activitiesBetween, requireActivity } from "./repo.ts";
@@ -25,7 +27,7 @@ export function recordingOf(activity: ActivityRow, samples?: ActivitySample[]): 
   const first = samples?.[0]?.time;
   const last = samples?.[samples.length - 1]?.time;
   return {
-    id: String(activity.id),
+    id: activity.id,
     source: activity.source,
     sportType: activity.sportType,
     startTime: first ?? activity.startMs,
@@ -38,23 +40,29 @@ export function recordingOf(activity: ActivityRow, samples?: ActivitySample[]): 
 export function candidateComponents(
   pool: readonly ActivityRow[],
   settings: MatchSettings,
-): number[][] {
+): StravaId[][] {
   return findCandidateGroups(
     pool.map((activity) => recordingOf(activity)),
     settings,
-  ).map((group) => group.map((recording) => Number(recording.id)));
+  ).map((group) => group.map((recording) => recording.id));
 }
 
 export function poolBetween(db: DatabaseSync, fromMs: number, toMs: number): ActivityRow[] {
   return activitiesBetween(db, fromMs, toMs).filter(pairable);
 }
 
+/**
+ * The member set as one key: ids in NUMERIC order, comma separated. This is
+ * hashed into the group id (and so the merge's external_id), so the order
+ * must stay numeric: a plain string sort would rename every existing group.
+ */
+export function memberKey(ids: readonly StravaId[]): string {
+  return [...ids].sort(compareStravaIds).join(",");
+}
+
 /** Stable group id from its first start and member ids. */
-export function groupIdFor(startMs: number, ids: readonly number[]): string {
-  const hash = createHash("sha256")
-    .update([...ids].sort((a, b) => a - b).join(","))
-    .digest("hex")
-    .slice(0, 10);
+export function groupIdFor(startMs: number, ids: readonly StravaId[]): string {
+  const hash = createHash("sha256").update(memberKey(ids)).digest("hex").slice(0, 10);
   return `g-${Math.floor(startMs / 1000)}-${hash}`;
 }
 
@@ -62,7 +70,7 @@ export function groupIdFor(startMs: number, ids: readonly number[]): string {
 export class SampleCache {
   readonly #db: DatabaseSync;
   readonly #backup: Pick<BackupService, "readOriginal">;
-  readonly #cache = new Map<number, ActivitySample[]>();
+  readonly #cache = new Map<StravaId, ActivitySample[]>();
 
   constructor(db: DatabaseSync, backup: Pick<BackupService, "readOriginal">) {
     this.#db = db;
@@ -70,7 +78,7 @@ export class SampleCache {
   }
 
   /** Samples of the original file. Callers only ask once the original is stored. */
-  async samples(activityId: number): Promise<ActivitySample[]> {
+  async samples(activityId: StravaId): Promise<ActivitySample[]> {
     const cached = this.#cache.get(activityId);
     if (cached !== undefined) return cached;
     const original = (await this.#backup.readOriginal(activityId))!;
@@ -80,7 +88,7 @@ export class SampleCache {
   }
 
   /** Concatenated samples of several activities, in the given order. */
-  async concat(ids: readonly number[]): Promise<ActivitySample[]> {
+  async concat(ids: readonly StravaId[]): Promise<ActivitySample[]> {
     const out: ActivitySample[] = [];
     for (const id of ids) out.push(...(await this.samples(id)));
     return out;
@@ -90,7 +98,7 @@ export class SampleCache {
     this.#cache.clear();
   }
 
-  async evaluate(ids: readonly number[], settings: MatchSettings): Promise<MatchResult> {
+  async evaluate(ids: readonly StravaId[], settings: MatchSettings): Promise<MatchResult> {
     const recordings: MatchRecording[] = [];
     for (const id of ids) {
       const samples = await this.samples(id);
@@ -106,9 +114,9 @@ export function summarizeMatch(result: MatchResult): unknown {
   return {
     decision: result.decision,
     reasons: result.reasons,
-    memberIds: result.memberIds.map(Number),
-    appIds: result.app?.members.map((m) => Number(m.id)) ?? [],
-    fitbitIds: result.fitbit?.members.map((m) => Number(m.id)) ?? [],
+    memberIds: result.memberIds,
+    appIds: result.app?.members.map((m) => m.id) ?? [],
+    fitbitIds: result.fitbit?.members.map((m) => m.id) ?? [],
     metrics:
       metrics === null
         ? null

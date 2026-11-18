@@ -221,7 +221,7 @@ describe("form entries", () => {
   });
 
   it("refuses to submit a form without its required fields", () => {
-    const path = "/activities/7000001";
+    const path = "/activities/9100000000000700001";
     expect(() =>
       assertSubmittable(path, [
         ["_method", "patch"],
@@ -393,7 +393,7 @@ describe("uploadHeaders", () => {
 describe("DeletionAuthorization", () => {
   const NOW = Date.parse("2030-04-03T12:00:00Z");
   const evidence: DeletionEvidence = {
-    activityId: 7000002,
+    activityId: "9100000000000700002",
     deletionSwitch: "on",
     originalFileBackedUp: true,
     backupVerifiedAt: NOW - 60_000,
@@ -404,23 +404,31 @@ describe("DeletionAuthorization", () => {
   it("mints a single-use token for one activity", () => {
     const auth = DeletionAuthorization.mint(evidence, NOW);
     expect(auth).toMatchObject({
-      activityId: 7000002,
+      activityId: "9100000000000700002",
       reason: "path_a_grace_elapsed",
       snapshot: "pool/cameld@synthetic",
       mintedAt: NOW,
       expiresAt: NOW + DeletionAuthorization.TTL_MS,
       consumed: false,
     });
-    expect(() => DeletionAuthorization.consume(auth, 7000001, NOW)).toThrow(/not 7000001/);
-    DeletionAuthorization.consume(auth, 7000002, NOW);
+    expect(() => DeletionAuthorization.consume(auth, "9100000000000700001", NOW)).toThrow(
+      /not 9100000000000700001/,
+    );
+    DeletionAuthorization.consume(auth, "9100000000000700002", NOW);
     expect(auth.consumed).toBe(true);
-    expect(() => DeletionAuthorization.consume(auth, 7000002, NOW)).toThrow(/already used/);
+    expect(() => DeletionAuthorization.consume(auth, "9100000000000700002", NOW)).toThrow(
+      /already used/,
+    );
   });
 
   it("expires", () => {
     const auth = DeletionAuthorization.mint(evidence, NOW);
     expect(() =>
-      DeletionAuthorization.consume(auth, 7000002, NOW + DeletionAuthorization.TTL_MS + 1),
+      DeletionAuthorization.consume(
+        auth,
+        "9100000000000700002",
+        NOW + DeletionAuthorization.TTL_MS + 1,
+      ),
     ).toThrow(/expired/);
   });
 
@@ -437,7 +445,7 @@ describe("DeletionAuthorization", () => {
 
   it("defaults the clock to now", () => {
     const auth = DeletionAuthorization.mint({ ...evidence, backupVerifiedAt: Date.now() - 1 });
-    DeletionAuthorization.consume(auth, 7000002);
+    DeletionAuthorization.consume(auth, "9100000000000700002");
     expect(auth.consumed).toBe(true);
   });
 
@@ -468,8 +476,13 @@ describe("DeletionAuthorization", () => {
   });
 
   it("refuses look-alikes", () => {
-    for (const fake of [null, undefined, 7000002, { activityId: 7000002, consumed: false }]) {
-      expect(() => DeletionAuthorization.consume(fake, 7000002, NOW)).toThrow(
+    for (const fake of [
+      null,
+      undefined,
+      7000002,
+      { activityId: "9100000000000700002", consumed: false },
+    ]) {
+      expect(() => DeletionAuthorization.consume(fake, "9100000000000700002", NOW)).toThrow(
         "not a DeletionAuthorization",
       );
     }
@@ -478,10 +491,10 @@ describe("DeletionAuthorization", () => {
 
 describe("deletionConfirmed", () => {
   it("accepts 404 or a known post-delete page, nothing else", () => {
-    expect(deletionConfirmed(404, "/activities/7000002")).toBe(true);
+    expect(deletionConfirmed(404, "/activities/9100000000000700002")).toBe(true);
     expect(deletionConfirmed(200, "/athlete/training")).toBe(true);
     expect(deletionConfirmed(200, "/dashboard")).toBe(true);
-    expect(deletionConfirmed(200, "/activities/7000002")).toBe(false);
+    expect(deletionConfirmed(200, "/activities/9100000000000700002")).toBe(false);
     expect(deletionConfirmed(200, "/features")).toBe(false);
     expect(deletionConfirmed(500, "/dashboard")).toBe(false);
   });

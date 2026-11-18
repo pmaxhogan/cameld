@@ -289,8 +289,8 @@ export class Backfill {
         decision = result.decision;
         report = { ...report, match: summarizeMatch(result) };
         if (result.decision === "auto" && result.app !== null && result.fitbit !== null) {
-          const app = await cache.concat(result.app.members.map((m) => Number(m.id)));
-          const fitbit = await cache.concat(result.fitbit.members.map((m) => Number(m.id)));
+          const app = await cache.concat(result.app.members.map((m) => m.id));
+          const fitbit = await cache.concat(result.fitbit.members.map((m) => m.id));
           try {
             const built = buildMerge(
               {

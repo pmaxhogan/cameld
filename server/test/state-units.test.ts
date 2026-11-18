@@ -32,14 +32,14 @@ import { captureLogger, memoryDb, RecordingNotifier } from "./state-helpers.ts";
 describe("repo", () => {
   it("handles unknown rows, null external ids, patches and transactions", () => {
     const db = memoryDb();
-    expect(getActivity(db, 1)).toBeNull();
-    expect(() => requireActivity(db, 1)).toThrow(/not known/);
+    expect(getActivity(db, "9100000000000000001")).toBeNull();
+    expect(() => requireActivity(db, "9100000000000000001")).toThrow(/not known/);
     expect(getGroup(db, "g")).toBeNull();
     expect(() => requireGroup(db, "g")).toThrow(/does not exist/);
     upsertActivity(
       db,
       {
-        id: 5,
+        id: "9100000000000000005",
         name: "Synthetic",
         sport_type: "Run",
         start_date: "2020-02-02T02:02:02Z",
@@ -50,12 +50,12 @@ describe("repo", () => {
       },
       0,
     );
-    expect(requireActivity(db, 5)).toMatchObject({
+    expect(requireActivity(db, "9100000000000000005")).toMatchObject({
       externalId: null,
       deviceName: null,
       source: "other",
     });
-    insertGroup(db, { id: "g", appIds: [5], fitbitIds: [], startMs: 0 }, 0);
+    insertGroup(db, { id: "g", appIds: ["9100000000000000005"], fitbitIds: [], startMs: 0 }, 0);
     patchGroup(db, "g", { match: null, trial: false, photosFlagged: true }, 1);
     expect(requireGroup(db, "g")).toMatchObject({ match: null, trial: false, photosFlagged: true });
     expect(writesFor(db, {})).toEqual([]);
@@ -266,6 +266,6 @@ describe("isTransient", () => {
   it("treats auth, budget and upload timeouts as transient", () => {
     expect(isTransient(new StravaAuthError("network"))).toBe(true);
     expect(isTransient(new BudgetExhaustedError("daily"))).toBe(true);
-    expect(isTransient(new UploadTimeoutError(1))).toBe(true);
+    expect(isTransient(new UploadTimeoutError("9100000000000000001"))).toBe(true);
   });
 });

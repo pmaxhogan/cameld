@@ -1,3 +1,4 @@
+import type { StravaId } from "@cameld/shared";
 import type { FieldChange } from "./forms.ts";
 
 /**
@@ -133,7 +134,7 @@ export class WebVerificationError extends WebSessionError {
   override readonly name = "WebVerificationError";
   readonly fields: string[];
   readonly changes: FieldChange[];
-  constructor(activityId: number, fields: string[], changes: FieldChange[] = []) {
+  constructor(activityId: StravaId, fields: string[], changes: FieldChange[] = []) {
     super(
       "verification_failed",
       `activity ${activityId}: re-read form disagrees on ${fields.join(", ")}`,
@@ -146,7 +147,7 @@ export class WebVerificationError extends WebSessionError {
 /** The delete request was sent but the activity still answers. */
 export class DeletionNotConfirmedError extends WebSessionError {
   override readonly name = "DeletionNotConfirmedError";
-  constructor(activityId: number) {
+  constructor(activityId: StravaId) {
     super("deletion_not_confirmed", `activity ${activityId} still exists after delete`);
   }
 }

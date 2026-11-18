@@ -1,7 +1,14 @@
-/** Typed subset of the Strava v3 API that cameld uses. */
+import type { StravaId } from "@cameld/shared";
+
+/**
+ * Typed subset of the Strava v3 API that cameld uses. Ids are decimal strings:
+ * the client parses every body with parseStravaJson (json.ts), which never
+ * turns an id into a (rounding) JavaScript number.
+ */
 
 export interface StravaAthlete {
-  id: number;
+  id: StravaId;
+  id_str?: string;
   username?: string | null;
   firstname?: string;
   lastname?: string;
@@ -9,7 +16,9 @@ export interface StravaAthlete {
 }
 
 export interface StravaSummaryActivity {
-  id: number;
+  id: StravaId;
+  id_str?: string;
+  athlete?: { id?: StravaId; [key: string]: unknown };
   name: string;
   sport_type: string;
   start_date: string;
@@ -32,13 +41,13 @@ export interface StravaDetailedActivity extends StravaSummaryActivity {
   /** True for a manual entry (no recorded file). */
   manual?: boolean;
   /** Null when the activity was not created from an upload. */
-  upload_id?: number | null;
+  upload_id?: StravaId | null;
   laps?: StravaLap[];
   segment_efforts?: unknown[];
 }
 
 export interface StravaLap {
-  id: number;
+  id: StravaId;
   name?: string;
   elapsed_time: number;
   moving_time?: number;
@@ -86,7 +95,7 @@ export interface StravaKudoer {
 }
 
 export interface StravaComment {
-  id: number;
+  id: StravaId;
   text: string;
   created_at?: string;
   [key: string]: unknown;
@@ -124,23 +133,23 @@ export interface CreateUploadParams {
 }
 
 export interface StravaUpload {
-  id: number;
+  id: StravaId;
   id_str?: string;
   external_id?: string | null;
   error?: string | null;
   status?: string;
-  activity_id?: number | null;
+  activity_id?: StravaId | null;
 }
 
 /** Outcome of an upload once Strava has finished (or refused) processing it. */
 export type UploadResult =
-  | { kind: "ready"; uploadId: number; activityId: number; upload: StravaUpload }
+  | { kind: "ready"; uploadId: StravaId; activityId: StravaId; upload: StravaUpload }
   | {
       kind: "duplicate";
-      uploadId: number;
+      uploadId: StravaId;
       /** The existing activity Strava says this upload duplicates. */
-      duplicateOf: number;
+      duplicateOf: StravaId;
       error: string;
       upload: StravaUpload;
     }
-  | { kind: "error"; uploadId: number; error: string; upload: StravaUpload };
+  | { kind: "error"; uploadId: StravaId; error: string; upload: StravaUpload };

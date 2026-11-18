@@ -127,7 +127,8 @@ export class HttpError extends Error {
 }
 
 function summary(db: DatabaseSync, group: GroupRow): GroupSummary {
-  const first = getActivity(db, group.appIds[0] ?? group.fitbitIds[0] ?? -1);
+  const firstId = group.appIds[0] ?? group.fitbitIds[0];
+  const first = firstId === undefined ? null : getActivity(db, firstId);
   return {
     id: group.id,
     status: group.status,

@@ -63,23 +63,23 @@ describe("request logging", () => {
     const { client, logged } = setup((req) =>
       req.url.pathname.endsWith("/streams")
         ? new Response("synthetic refusal text", { status: 500 })
-        : Response.json({ id: 7, name: "Synthetic Name" }),
+        : Response.json({ id: "9100000000000000007", name: "Synthetic Name" }),
     );
-    await client.getActivity(7);
-    await expect(client.getStreams(7)).rejects.toBeInstanceOf(StravaApiError);
+    await client.getActivity("9100000000000000007");
+    await expect(client.getStreams("9100000000000000007")).rejects.toBeInstanceOf(StravaApiError);
     const lines = logged.map((l) => JSON.parse(l) as Record<string, unknown>);
     expect(lines[0]).toMatchObject({
       mod: "strava-api",
       msg: "strava api request",
       method: "GET",
-      path: "/activities/7",
+      path: "/activities/9100000000000000007",
       status: 200,
       attempt: 0,
     });
     expect(lines[0]?.usage).toMatchObject({ read: { day: expect.anything() } });
     expect(lines[1]).toMatchObject({
       msg: "strava api request refused",
-      path: "/activities/7/streams",
+      path: "/activities/9100000000000000007/streams",
       status: 500,
     });
     const text = logged.join("");
@@ -97,8 +97,12 @@ describe("request logging", () => {
 
 describe("parseDuplicateOf and classifyUpload", () => {
   it("parses duplicate errors", () => {
-    expect(parseDuplicateOf("merged.fit duplicate of activity 4242424242")).toBe(4242424242);
-    expect(parseDuplicateOf("Duplicate Of Activity 7")).toBe(7);
+    expect(parseDuplicateOf("merged.fit duplicate of activity 9100000004242424242")).toBe(
+      "9100000004242424242",
+    );
+    expect(parseDuplicateOf("Duplicate Of Activity 9100000000000000007")).toBe(
+      "9100000000000000007",
+    );
     expect(parseDuplicateOf("something else")).toBeNull();
     expect(parseDuplicateOf(null)).toBeNull();
     expect(parseDuplicateOf(undefined)).toBeNull();
@@ -107,38 +111,57 @@ describe("parseDuplicateOf and classifyUpload", () => {
   it("parses the html duplicate form strava really sends, taking the id from the href", () => {
     expect(
       parseDuplicateOf(
-        "merged.fit duplicate of <a href='/activities/12345' target='_blank'>Evening Walk</a>",
+        "merged.fit duplicate of <a href='/activities/9100000000000012345' target='_blank'>Evening Walk</a>",
       ),
-    ).toBe(12345);
-    expect(
-      parseDuplicateOf('x.fit duplicate of <a class="x" href="/activities/987">Walk 42</a>'),
-    ).toBe(987);
+    ).toBe("9100000000000012345");
     expect(
       parseDuplicateOf(
-        "x duplicate of <a href='https://www.strava.com/activities/31337'>Activity 7</a>",
+        'x.fit duplicate of <a class="x" href="/activities/9100000000000000987">Walk 42</a>',
       ),
-    ).toBe(31337);
-    expect(parseDuplicateOf("duplicate of <a href=/activities/55>Run</a>")).toBe(55);
+    ).toBe("9100000000000000987");
+    expect(
+      parseDuplicateOf(
+        "x duplicate of <a href='https://www.strava.com/activities/9100000000000031337'>Activity 7</a>",
+      ),
+    ).toBe("9100000000000031337");
+    expect(parseDuplicateOf("duplicate of <a href=/activities/9100000000000000055>Run</a>")).toBe(
+      "9100000000000000055",
+    );
     // Link text digits are never mistaken for the id.
     expect(parseDuplicateOf("duplicate of <a href='/athletes/9'>Activity 77</a>")).toBeNull();
     expect(parseDuplicateOf("duplicate of activity 0")).toBeNull();
     expect(
-      classifyUpload({ id: 3, error: "a duplicate of <a href='/activities/42'>Walk</a>" }),
-    ).toMatchObject({ kind: "duplicate", duplicateOf: 42 });
+      classifyUpload({
+        id: "9100000000000000003",
+        error: "a duplicate of <a href='/activities/9100000000000000042'>Walk</a>",
+      }),
+    ).toMatchObject({ kind: "duplicate", duplicateOf: "9100000000000000042" });
   });
 
   it("classifies uploads", () => {
-    expect(classifyUpload({ id: 1, status: "Your activity is still being processed." })).toBeNull();
-    expect(classifyUpload({ id: 1, error: "", activity_id: null })).toBeNull();
-    expect(classifyUpload({ id: 1, activity_id: 9 })).toMatchObject({
+    expect(
+      classifyUpload({
+        id: "9100000000000000001",
+        status: "Your activity is still being processed.",
+      }),
+    ).toBeNull();
+    expect(classifyUpload({ id: "9100000000000000001", error: "", activity_id: null })).toBeNull();
+    expect(
+      classifyUpload({ id: "9100000000000000001", activity_id: "9100000000000000009" }),
+    ).toMatchObject({
       kind: "ready",
-      activityId: 9,
+      activityId: "9100000000000000009",
     });
-    expect(classifyUpload({ id: 1, error: "x.fit duplicate of activity 55" })).toMatchObject({
+    expect(
+      classifyUpload({
+        id: "9100000000000000001",
+        error: "x.fit duplicate of activity 9100000000000000055",
+      }),
+    ).toMatchObject({
       kind: "duplicate",
-      duplicateOf: 55,
+      duplicateOf: "9100000000000000055",
     });
-    expect(classifyUpload({ id: 1, error: "Malformed file" })).toMatchObject({
+    expect(classifyUpload({ id: "9100000000000000001", error: "Malformed file" })).toMatchObject({
       kind: "error",
       error: "Malformed file",
     });
@@ -150,31 +173,31 @@ describe("StravaClient reads", () => {
     const { client, requests } = setup(() => Response.json([]));
     await client.listActivities({ after: 100, before: 200, page: 2, per_page: 50 });
     await client.listActivities();
-    await client.getActivity(11);
-    await client.getActivity(11, true);
-    await client.getStreams(12);
-    await client.getStreams(12, ["time", "heartrate"]);
-    await client.getActivityPhotos(13);
-    await client.getKudoers(14);
-    await client.getComments(15);
-    await client.getLaps(16);
+    await client.getActivity("9100000000000000011");
+    await client.getActivity("9100000000000000011", true);
+    await client.getStreams("9100000000000000012");
+    await client.getStreams("9100000000000000012", ["time", "heartrate"]);
+    await client.getActivityPhotos("9100000000000000013");
+    await client.getKudoers("9100000000000000014");
+    await client.getComments("9100000000000000015");
+    await client.getLaps("9100000000000000016");
     await client.getAthlete();
-    await client.getUpload(17);
+    await client.getUpload("9100000000000000017");
 
     const summary = requests.map((r) => `${r.method} ${r.url.pathname}${r.url.search}`);
     expect(summary).toEqual([
       "GET /api/v3/athlete/activities?after=100&before=200&page=2&per_page=50",
       "GET /api/v3/athlete/activities",
-      "GET /api/v3/activities/11?include_all_efforts=false",
-      "GET /api/v3/activities/11?include_all_efforts=true",
-      "GET /api/v3/activities/12/streams?keys=time%2Cdistance%2Clatlng%2Caltitude%2Cvelocity_smooth%2Cheartrate%2Ccadence%2Cwatts%2Ctemp%2Cmoving%2Cgrade_smooth&key_by_type=true",
-      "GET /api/v3/activities/12/streams?keys=time%2Cheartrate&key_by_type=true",
-      "GET /api/v3/activities/13/photos?photo_sources=true&size=2048",
-      "GET /api/v3/activities/14/kudos",
-      "GET /api/v3/activities/15/comments",
-      "GET /api/v3/activities/16/laps",
+      "GET /api/v3/activities/9100000000000000011?include_all_efforts=false",
+      "GET /api/v3/activities/9100000000000000011?include_all_efforts=true",
+      "GET /api/v3/activities/9100000000000000012/streams?keys=time%2Cdistance%2Clatlng%2Caltitude%2Cvelocity_smooth%2Cheartrate%2Ccadence%2Cwatts%2Ctemp%2Cmoving%2Cgrade_smooth&key_by_type=true",
+      "GET /api/v3/activities/9100000000000000012/streams?keys=time%2Cheartrate&key_by_type=true",
+      "GET /api/v3/activities/9100000000000000013/photos?photo_sources=true&size=2048",
+      "GET /api/v3/activities/9100000000000000014/kudos",
+      "GET /api/v3/activities/9100000000000000015/comments",
+      "GET /api/v3/activities/9100000000000000016/laps",
       "GET /api/v3/athlete",
-      "GET /api/v3/uploads/17",
+      "GET /api/v3/uploads/9100000000000000017",
     ]);
     for (const r of requests) expect(r.headers.get("authorization")).toBe("Bearer tok-abc");
   });
@@ -199,7 +222,7 @@ describe("StravaClient reads", () => {
 
   it("throws a typed error with a truncated body on failure", async () => {
     const { client } = setup(() => new Response("x".repeat(1000), { status: 404 }));
-    const error = await client.getActivity(1).catch((e: unknown) => e);
+    const error = await client.getActivity("9100000000000000001").catch((e: unknown) => e);
     expect(error).toBeInstanceOf(StravaApiError);
     expect((error as StravaApiError).status).toBe(404);
     expect((error as StravaApiError).message.length).toBeLessThan(400);
@@ -220,9 +243,11 @@ describe("StravaClient reads", () => {
 describe("StravaClient rate limiting", () => {
   it("treats 429 as an exhausted window, waits for the boundary and retries", async () => {
     const { client, clock, requests } = setup((_req, n) =>
-      n === 1 ? new Response("slow down", { status: 429 }) : Response.json({ id: 1 }),
+      n === 1
+        ? new Response("slow down", { status: 429 })
+        : Response.json({ id: "9100000000000000001" }),
     );
-    await expect(client.getAthlete()).resolves.toEqual({ id: 1 });
+    await expect(client.getAthlete()).resolves.toEqual({ id: "9100000000000000001" });
     expect(requests).toHaveLength(2);
     expect(clock.t).toBe(Date.parse("2030-01-01T10:15:00Z"));
   });
@@ -237,8 +262,8 @@ describe("StravaClient rate limiting", () => {
   });
 
   it("uses the write budget only for writes", async () => {
-    const { client, limiter } = setup(() => Response.json({ id: 1 }));
-    await client.updateActivity(1, { name: "x" });
+    const { client, limiter } = setup(() => Response.json({ id: "9100000000000000001" }));
+    await client.updateActivity("9100000000000000001", { name: "x" });
     expect(limiter.usage().read.fifteenMinute.usage).toBe(0);
     expect(limiter.usage().overall.fifteenMinute.usage).toBe(1);
   });
@@ -267,8 +292,8 @@ describe("StravaClient rate limiting", () => {
 
 describe("StravaClient writes and uploads", () => {
   it("updates an activity with a JSON PUT", async () => {
-    const { client, requests } = setup(() => Response.json({ id: 5 }));
-    await client.updateActivity(5, {
+    const { client, requests } = setup(() => Response.json({ id: "9100000000000000005" }));
+    await client.updateActivity("9100000000000000005", {
       name: "n",
       description: "d",
       sport_type: "Run",
@@ -292,7 +317,9 @@ describe("StravaClient writes and uploads", () => {
   });
 
   it("posts multipart uploads with the file bytes and fields", async () => {
-    const { client, requests } = setup(() => Response.json({ id: 77, status: "processing" }));
+    const { client, requests } = setup(() =>
+      Response.json({ id: "9100000000000000077", status: "processing" }),
+    );
     const bytes = new Uint8Array([1, 2, 3, 4]);
     const upload = await client.createUpload({
       file: bytes,
@@ -301,7 +328,7 @@ describe("StravaClient writes and uploads", () => {
       name: "Merged",
       description: "Desc",
     });
-    expect(upload.id).toBe(77);
+    expect(upload.id).toBe("9100000000000000077");
     const req = requests[0];
     expect(req?.method).toBe("POST");
     expect(req?.headers.has("content-type")).toBe(false);
@@ -316,7 +343,7 @@ describe("StravaClient writes and uploads", () => {
   });
 
   it("omits optional upload fields and honors a filename", async () => {
-    const { client, requests } = setup(() => Response.json({ id: 1 }));
+    const { client, requests } = setup(() => Response.json({ id: "9100000000000000001" }));
     await client.createUpload({
       file: new Uint8Array(),
       data_type: "gpx",
@@ -331,41 +358,58 @@ describe("StravaClient writes and uploads", () => {
 
   it("polls no faster than once a second until the activity is ready", async () => {
     const statuses: StravaUpload[] = [
-      { id: 9, status: "Your activity is still being processed." },
-      { id: 9, status: "Your activity is still being processed." },
-      { id: 9, status: "Your activity is ready.", activity_id: 321 },
+      { id: "9100000000000000009", status: "Your activity is still being processed." },
+      { id: "9100000000000000009", status: "Your activity is still being processed." },
+      {
+        id: "9100000000000000009",
+        status: "Your activity is ready.",
+        activity_id: "9100000000000000321",
+      },
     ];
     const { client, clock, requests } = setup((req) => {
-      if (req.method === "POST") return Response.json({ id: 9, status: "queued" });
+      if (req.method === "POST")
+        return Response.json({ id: "9100000000000000009", status: "queued" });
       return Response.json(statuses.shift());
     });
     const result = await client.uploadAndWait(
       { file: new Uint8Array([1]), data_type: "fit", external_id: "e" },
       { intervalMs: 10 },
     );
-    expect(result).toMatchObject({ kind: "ready", uploadId: 9, activityId: 321 });
+    expect(result).toMatchObject({
+      kind: "ready",
+      uploadId: "9100000000000000009",
+      activityId: "9100000000000000321",
+    });
     expect(clock.sleeps).toEqual([1000, 1000, 1000]);
     expect(requests.map((r) => r.method)).toEqual(["POST", "GET", "GET", "GET"]);
   });
 
   it("returns a typed duplicate result instead of throwing", async () => {
     const { client } = setup(() =>
-      Response.json({ id: 3, error: "e.fit duplicate of activity 998877", activity_id: null }),
+      Response.json({
+        id: "9100000000000000003",
+        error: "e.fit duplicate of activity 9100000000000998877",
+        activity_id: null,
+      }),
     );
     const result = await client.uploadAndWait({
       file: new Uint8Array([1]),
       data_type: "fit",
       external_id: "e",
     });
-    expect(result).toMatchObject({ kind: "duplicate", duplicateOf: 998877, uploadId: 3 });
+    expect(result).toMatchObject({
+      kind: "duplicate",
+      duplicateOf: "9100000000000998877",
+      uploadId: "9100000000000000003",
+    });
   });
 
   it("returns a duplicate found while polling, and other errors as error results", async () => {
     let calls = 0;
     const { client } = setup(() => {
       calls += 1;
-      if (calls === 1) return Response.json({ id: 4, status: "processing" });
-      return Response.json({ id: 4, error: "Unsupported file" });
+      if (calls === 1) return Response.json({ id: "9100000000000000004", status: "processing" });
+      return Response.json({ id: "9100000000000000004", error: "Unsupported file" });
     });
     const result = await client.uploadAndWait({
       file: new Uint8Array([1]),
@@ -374,24 +418,31 @@ describe("StravaClient writes and uploads", () => {
     });
     expect(result).toEqual({
       kind: "error",
-      uploadId: 4,
+      uploadId: "9100000000000000004",
       error: "Unsupported file",
-      upload: { id: 4, error: "Unsupported file" },
+      upload: { id: "9100000000000000004", error: "Unsupported file" },
     });
   });
 
   it("times out when Strava keeps processing", async () => {
-    const { client } = setup(() => Response.json({ id: 8, status: "processing" }));
+    const { client } = setup(() =>
+      Response.json({ id: "9100000000000000008", status: "processing" }),
+    );
     const error = await client
-      .waitForUpload({ id: 8, status: "processing" }, { intervalMs: 1000, timeoutMs: 3000 })
+      .waitForUpload(
+        { id: "9100000000000000008", status: "processing" },
+        { intervalMs: 1000, timeoutMs: 3000 },
+      )
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(UploadTimeoutError);
-    expect((error as UploadTimeoutError).uploadId).toBe(8);
+    expect((error as UploadTimeoutError).uploadId).toBe("9100000000000000008");
   });
 
   it("uses default poll options", async () => {
-    const { client } = setup(() => Response.json({ id: 8, activity_id: 1 }));
-    const result = await client.waitForUpload({ id: 8 });
+    const { client } = setup(() =>
+      Response.json({ id: "9100000000000000008", activity_id: "9100000000000000001" }),
+    );
+    const result = await client.waitForUpload({ id: "9100000000000000008" });
     expect(result.kind).toBe("ready");
   });
 });

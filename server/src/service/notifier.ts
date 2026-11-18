@@ -1,3 +1,4 @@
+import type { StravaId } from "@cameld/shared";
 import type { Logger } from "../logging.ts";
 
 /**
@@ -34,7 +35,7 @@ export interface Notification {
   title: string;
   body: string;
   groupId?: string;
-  activityId?: number;
+  activityId?: StravaId;
 }
 
 export interface Notifier {

@@ -1,8 +1,9 @@
+import type { StravaId } from "@cameld/shared";
 import type { DatabaseSync } from "node:sqlite";
 import type { Logger } from "../logging.ts";
 import type { MergeMachine } from "../state/machine.ts";
 import { isTransient } from "../state/machine.ts";
-import { setActivityFields, upsertActivity } from "../state/repo.ts";
+import { activityIds, setActivityFields, upsertActivity } from "../state/repo.ts";
 import type { SettingsStore } from "../state/settings.ts";
 import { StravaApiError, type StravaClient } from "../strava/client.ts";
 import type { Clock, RateLimiter } from "../strava/rate-limiter.ts";
@@ -91,7 +92,7 @@ export class Poller {
         m: number | null;
       };
       const after = Math.floor(((newest.m ?? now) - LOOKBACK_MS) / 1000);
-      const ids: number[] = [];
+      const ids: StravaId[] = [];
       for (let page = 1; ; page += 1) {
         const batch = await api.listActivities({ after, page, per_page: this.#pageSize });
         for (const activity of batch) {
@@ -103,20 +104,20 @@ export class Poller {
       }
       this.#log?.debug({ after, listed }, "recent activities listed");
       // New activities get a full backup; known ones only what is still missing.
-      const incomplete = db
-        .prepare(
-          `SELECT id FROM activities WHERE gone_at IS NULL AND is_merge_output = 0
-           AND (backed_up_at IS NULL OR web_form_saved = 0
-                OR (original_status = 'pending'
-                    AND (original_next_attempt_at IS NULL OR original_next_attempt_at <= ?)))
-           ORDER BY start_ms DESC`,
-        )
-        .all(now) as { id: number }[];
+      const incomplete = activityIds(
+        db,
+        `SELECT id FROM activities WHERE gone_at IS NULL AND is_merge_output = 0
+         AND (backed_up_at IS NULL OR web_form_saved = 0
+              OR (original_status = 'pending'
+                  AND (original_next_attempt_at IS NULL OR original_next_attempt_at <= ?)))
+         ORDER BY start_ms DESC`,
+        now,
+      );
       const listedIds = new Set(ids);
       let retries = 0;
       let deferred = 0;
       let gone = 0;
-      for (const { id } of incomplete) {
+      for (const id of incomplete) {
         const isListed = listedIds.has(id);
         if (!isListed) {
           if (retries >= this.#retryLimit || this.#readsLeftToday() < this.#readReserve) {

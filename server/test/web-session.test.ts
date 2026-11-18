@@ -55,14 +55,22 @@ describe("WebSession edge paths", () => {
   });
 
   it("validates ids", () => {
-    expect(() => assertId(1)).not.toThrow();
-    expect(() => assertId(0)).toThrow("activity id must be a positive integer");
-    expect(() => assertId(Number.MAX_SAFE_INTEGER + 1, "athlete id")).toThrow(/athlete id/);
+    expect(() => assertId("1")).not.toThrow();
+    // A 64-bit id above 2^53 is a valid id: it must survive as a string.
+    expect(() => assertId("9007199254740993")).not.toThrow();
+    expect(() => assertId("9223372036854775807")).not.toThrow();
+    expect(() => assertId("0")).toThrow("activity id must be a positive integer");
+    for (const bad of ["012", "12a", "", "-5", "9223372036854775808", "1.5"]) {
+      expect(() => assertId(bad), bad).toThrow("activity id must be a positive integer");
+    }
+    expect(() => assertId("0", "athlete id")).toThrow(/athlete id/);
   });
 
   it("refuses a browser without a default context", async () => {
     const web = session(stubBrowser([]));
-    await expect(web.getEditForm(1)).rejects.toBeInstanceOf(BrowserUnavailableError);
+    await expect(web.getEditForm("9100000000000000001")).rejects.toBeInstanceOf(
+      BrowserUnavailableError,
+    );
     expect(await web.health()).toMatchObject({ loggedIn: false, reason: "browser_unavailable" });
   });
 
@@ -77,7 +85,7 @@ describe("WebSession edge paths", () => {
     const page = stubPage();
     const late = new Promise<StubPage>((resolve) => setTimeout(() => resolve(page), 150));
     const web = session(stubBrowser([{ newPage: () => late }]), { operationTimeoutMs: 20 });
-    await expect(web.exportGpx(1)).rejects.toBeInstanceOf(WebTimeoutError);
+    await expect(web.exportGpx("9100000000000000001")).rejects.toBeInstanceOf(WebTimeoutError);
     await late;
     await new Promise((r) => setTimeout(r, 20));
     expect(page.closed).toBe(true);
@@ -90,7 +98,7 @@ describe("WebSession edge paths", () => {
       connect: () => Promise.resolve(stubBrowser([{ newPage: () => Promise.resolve(page) }])),
       pageCloseTimeoutMs: 20,
     });
-    await expect(web.getEditForm(1)).rejects.toThrow(TypeError);
+    await expect(web.getEditForm("9100000000000000001")).rejects.toThrow(TypeError);
   });
 
   it("passes a non-timeout failure of the hydration wait through without reading", async () => {
@@ -98,7 +106,7 @@ describe("WebSession edge paths", () => {
     const page = {
       ...stubPage(),
       goto: () => Promise.resolve({ status: () => 200 }),
-      url: () => "https://www.strava.com/activities/1/edit",
+      url: () => "https://www.strava.com/activities/9100000000000000001/edit",
       content: () => Promise.resolve("<html><body>synthetic</body></html>"),
       waitForFunction: () => Promise.reject(new TypeError("synthetic page crash")),
       evaluate: () => {
@@ -109,7 +117,7 @@ describe("WebSession edge paths", () => {
     const web = session(
       stubBrowser([{ newPage: () => Promise.resolve(page as unknown as StubPage) }]),
     );
-    await expect(web.getEditForm(1)).rejects.toThrow("synthetic page crash");
+    await expect(web.getEditForm("9100000000000000001")).rejects.toThrow("synthetic page crash");
     expect(evaluated).toBe(0);
   });
 
@@ -118,7 +126,7 @@ describe("WebSession edge paths", () => {
     const page = {
       ...stubPage(),
       goto: () => Promise.resolve({ status: () => 200 }),
-      url: () => "https://www.strava.com/activities/1/edit",
+      url: () => "https://www.strava.com/activities/9100000000000000001/edit",
       content: () => Promise.resolve("<html><body>synthetic</body></html>"),
       waitForFunction: () => Promise.resolve(),
       evaluate: () => Promise.resolve(snapshots.shift() ?? null),
@@ -131,7 +139,9 @@ describe("WebSession edge paths", () => {
         ),
       formStableIntervalMs: 0,
     });
-    await expect(web.getEditForm(1)).rejects.toThrow("/activities/1/edit has no activity form");
+    await expect(web.getEditForm("9100000000000000001")).rejects.toThrow(
+      "/activities/9100000000000000001/edit has no activity form",
+    );
     expect(snapshots).toEqual([]);
   });
 
@@ -149,8 +159,8 @@ describe("WebSession edge paths", () => {
         return Promise.resolve(browser);
       },
     });
-    await expect(web.getEditForm(1)).rejects.toThrow(TypeError);
-    await expect(web.getEditForm(2)).rejects.toThrow(TypeError);
+    await expect(web.getEditForm("9100000000000000001")).rejects.toThrow(TypeError);
+    await expect(web.getEditForm("9100000000000000002")).rejects.toThrow(TypeError);
     expect(connects).toBe(1);
     await web.disconnect();
   });
@@ -287,7 +297,7 @@ describe("WebSession hung-tab remediation (decision paths, no browser)", () => {
         throw new Error("synthetic notifier bug");
       },
     });
-    await expect(web.exportGpx(1)).rejects.toThrow("after remediation");
+    await expect(web.exportGpx("9100000000000000001")).rejects.toThrow("after remediation");
     expect(reports).toEqual([
       {
         outcome: "failed",

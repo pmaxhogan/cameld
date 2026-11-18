@@ -1,3 +1,4 @@
+import type { StravaId } from "@cameld/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { NotRestorableError } from "../src/state/machine.ts";
 import {
@@ -28,8 +29,8 @@ afterEach(async () => {
 const MINUTE = 60_000;
 
 /** Fresh (pre-delete) backups taken, per activity id. */
-function countFreshBackups(harness: Harness): Map<number, number> {
-  const counts = new Map<number, number>();
+function countFreshBackups(harness: Harness): Map<StravaId, number> {
+  const counts = new Map<StravaId, number>();
   const original = harness.backup.backupActivity.bind(harness.backup);
   harness.backup.backupActivity = (id, options = {}) => {
     if (options.fresh === true) counts.set(id, (counts.get(id) ?? 0) + 1);
@@ -39,13 +40,13 @@ function countFreshBackups(harness: Harness): Map<number, number> {
 }
 
 /** Strava refuses the merge while an original exists; restored originals are accepted. */
-function refuseMergesOnly(harness: Harness, duplicateOf: number): void {
+function refuseMergesOnly(harness: Harness, duplicateOf: StravaId): void {
   harness.world.duplicatePolicy = (incoming) =>
     incoming.externalId.startsWith("cameld-merge-") ? duplicateOf : null;
 }
 
-function deleteCalls(harness: Harness): number[] {
-  return harness.session.calls.filter((c) => c.op === "delete").map((c) => c.id as number);
+function deleteCalls(harness: Harness): StravaId[] {
+  return harness.session.calls.filter((c) => c.op === "delete").map((c) => c.id as StravaId);
 }
 
 describe("path B: the API lags a web delete", () => {

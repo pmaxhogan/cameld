@@ -1,3 +1,4 @@
+import type { StravaId } from "@cameld/shared";
 import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -305,13 +306,13 @@ describe("freeze on failure", () => {
     h.restart({
       api: {
         ...h.client,
-        getActivity: (id: number) => h.client.getActivity(id),
-        getStreams: (id: number, keys?: never) => h.client.getStreams(id, keys),
+        getActivity: (id: StravaId) => h.client.getActivity(id),
+        getStreams: (id: StravaId, keys?: never) => h.client.getStreams(id, keys),
         listActivities: (p?: never) => h.client.listActivities(p),
-        updateActivity: (id: number, f: never) => h.client.updateActivity(id, f),
-        getUpload: (id: number) => h.client.getUpload(id),
+        updateActivity: (id: StravaId, f: never) => h.client.updateActivity(id, f),
+        getUpload: (id: StravaId) => h.client.getUpload(id),
         waitForUpload: (u: never, o?: never) => h.client.waitForUpload(u, o),
-        getActivityPhotos: (id: number, size?: number) => h.client.getActivityPhotos(id, size),
+        getActivityPhotos: (id: StravaId, size?: number) => h.client.getActivityPhotos(id, size),
         createUpload: () => Promise.reject(new StravaApiError(400, "/uploads", "bad request")),
       },
     });

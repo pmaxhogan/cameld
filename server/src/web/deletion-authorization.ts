@@ -1,3 +1,4 @@
+import { isStravaId, type StravaId } from "@cameld/shared";
 import { DeletionUnauthorizedError } from "./errors.ts";
 
 /**
@@ -26,7 +27,7 @@ import { DeletionUnauthorizedError } from "./errors.ts";
 export type DeletionReason = "path_a_grace_elapsed" | "path_b_duplicate_rejected" | "rollout_trial";
 
 export interface DeletionEvidence {
-  activityId: number;
+  activityId: StravaId;
   /**
    * The owner's go-ahead: "on" is the deletion switch; "trial" is the
    * separately switched rollout trial allowance (at most three pairs) and is
@@ -54,7 +55,7 @@ export class DeletionAuthorization {
 
   readonly #brand = true;
   #consumed = false;
-  readonly activityId: number;
+  readonly activityId: StravaId;
   readonly reason: DeletionReason;
   readonly snapshot: string;
   readonly mintedAt: number;
@@ -74,8 +75,7 @@ export class DeletionAuthorization {
    */
   static mint(evidence: DeletionEvidence, now: number = Date.now()): DeletionAuthorization {
     const problems: string[] = [];
-    if (!Number.isSafeInteger(evidence.activityId) || evidence.activityId <= 0)
-      problems.push("activityId");
+    if (!isStravaId(evidence.activityId)) problems.push("activityId");
     const permit = evidence.deletionSwitch;
     if (permit !== "on" && !(permit === "trial" && evidence.reason === "rollout_trial"))
       problems.push("deletionSwitch");
@@ -99,7 +99,7 @@ export class DeletionAuthorization {
    * purpose: anything that is not a genuine, unexpired, unused token for this
    * exact activity is refused.
    */
-  static consume(auth: unknown, activityId: number, now: number = Date.now()): void {
+  static consume(auth: unknown, activityId: StravaId, now: number = Date.now()): void {
     if (typeof auth !== "object" || auth === null || !(#brand in auth))
       throw new DeletionUnauthorizedError("not a DeletionAuthorization");
     const token = auth as DeletionAuthorization;

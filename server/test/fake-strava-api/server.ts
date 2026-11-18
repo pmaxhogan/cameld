@@ -1,11 +1,37 @@
 import Fastify, { type FastifyReply } from "fastify";
-import { FAKE_ATHLETE_ID, type FakeWorld, type WorldActivity, type WorldUpload } from "./world.ts";
+import {
+  FAKE_ATHLETE_ID,
+  FakeWorld,
+  uploadIdOf,
+  type WorldActivity,
+  type WorldUpload,
+} from "./world.ts";
 
 /**
  * A fake of the Strava v3 API endpoints cameld uses, over a FakeWorld.
  * SYNTHETIC data only. Photos are served from /cdn/<unique id>, standing in
  * for Strava's image CDN.
+ *
+ * Ids travel the way the live API sends them: a JSON NUMBER in `id`,
+ * `upload_id` and `activity_id` (64-bit, so beyond what JSON.parse can read
+ * exactly), with the string twins `id_str` and `upload_id_str` next to the
+ * first two and no twin for an upload's `activity_id`.
  */
+
+const NUMBER_KEYS: ReadonlySet<string> = new Set(["id", "upload_id", "activity_id"]);
+const rawJson = (JSON as unknown as { rawJSON(text: string): unknown }).rawJSON;
+
+/** JSON with every id written as a bare integer literal, whatever its size. */
+export function stravaJson(payload: unknown): string {
+  return JSON.stringify(payload, (key, value: unknown) =>
+    NUMBER_KEYS.has(key) && typeof value === "string" && /^\d+$/.test(value)
+      ? rawJson(value)
+      : value,
+  );
+}
+
+/** The athlete as the API nests it in an activity. */
+const ATHLETE = { id: FAKE_ATHLETE_ID, id_str: FAKE_ATHLETE_ID };
 
 export interface FakeStravaApi {
   /** Base for StravaClient (`.../api/v3`). */
@@ -21,7 +47,8 @@ function iso(ms: number): string {
 function detail(a: WorldActivity, origin: string) {
   return {
     id: a.id,
-    athlete: { id: FAKE_ATHLETE_ID },
+    id_str: a.id,
+    athlete: { ...ATHLETE },
     name: a.name,
     description: a.description,
     sport_type: a.sportType,
@@ -35,7 +62,8 @@ function detail(a: WorldActivity, origin: string) {
     external_id: a.externalId,
     manual: a.manual,
     // Like Strava: null for a manual entry, an upload id otherwise.
-    upload_id: a.manual ? null : a.id + 500_000,
+    upload_id: a.manual ? null : uploadIdOf(a.id),
+    upload_id_str: a.manual ? null : uploadIdOf(a.id),
     gear_id: a.gearId,
     // Like Strava, optional fields are sometimes absent rather than false.
     commute: a.commute || undefined,
@@ -56,7 +84,7 @@ function uploadJson(u: WorldUpload) {
   const processing = u.pollsLeft > 0;
   return {
     id: u.id,
-    id_str: String(u.id),
+    id_str: u.id,
     external_id: u.externalId,
     error: processing ? null : u.error,
     status: processing
@@ -77,6 +105,7 @@ function notFound(reply: FastifyReply) {
 
 export async function startFakeStravaApi(world: FakeWorld): Promise<FakeStravaApi> {
   const app = Fastify({ logger: false });
+  app.setReplySerializer(stravaJson);
   let origin = "";
   app.addContentTypeParser("multipart/form-data", { parseAs: "buffer" }, (_req, body, done) => {
     done(null, body);
@@ -95,7 +124,7 @@ export async function startFakeStravaApi(world: FakeWorld): Promise<FakeStravaAp
     reply.header("x-readratelimit-usage", `1,${world.requests.length}`);
   });
 
-  app.get("/api/v3/athlete", () => ({ id: FAKE_ATHLETE_ID, firstname: "Synthetic" }));
+  app.get("/api/v3/athlete", () => ({ ...ATHLETE, firstname: "Synthetic" }));
 
   app.get<{ Querystring: Record<string, string> }>("/api/v3/athlete/activities", (request) => {
     const q = request.query;
@@ -106,20 +135,20 @@ export async function startFakeStravaApi(world: FakeWorld): Promise<FakeStravaAp
     return world
       .apiLive()
       .filter((a) => a.startMs > after && a.startMs < before)
-      .sort((a, b) => b.startMs - a.startMs || b.id - a.id)
+      .sort(FakeWorld.newestFirst)
       .slice((page - 1) * perPage, page * perPage)
       .map((a) => detail(a, origin));
   });
 
   app.get<{ Params: { id: string } }>("/api/v3/activities/:id", (request, reply) => {
-    const a = world.apiGet(Number(request.params.id));
+    const a = world.apiGet(request.params.id);
     return a === undefined ? notFound(reply) : detail(a, origin);
   });
 
   app.put<{ Params: { id: string }; Body: Record<string, unknown> }>(
     "/api/v3/activities/:id",
     (request, reply) => {
-      const a = world.get(Number(request.params.id));
+      const a = world.get(request.params.id);
       if (a === undefined) return notFound(reply);
       const b = request.body;
       if (typeof b.name === "string") a.name = b.name;
@@ -134,7 +163,7 @@ export async function startFakeStravaApi(world: FakeWorld): Promise<FakeStravaAp
   );
 
   app.get<{ Params: { id: string } }>("/api/v3/activities/:id/streams", (request, reply) => {
-    const a = world.get(Number(request.params.id));
+    const a = world.get(request.params.id);
     if (a === undefined) return notFound(reply);
     if (a.samples.length === 0) return notFound(reply);
     if (world.streamsOverride !== undefined) return world.streamsOverride(a.id);
@@ -151,7 +180,7 @@ export async function startFakeStravaApi(world: FakeWorld): Promise<FakeStravaAp
   });
 
   app.get<{ Params: { id: string } }>("/api/v3/activities/:id/photos", (request, reply) => {
-    const a = world.get(Number(request.params.id));
+    const a = world.get(request.params.id);
     if (a === undefined) return notFound(reply);
     return a.photos.map((p) => ({
       unique_id: p.uniqueId,
@@ -161,12 +190,12 @@ export async function startFakeStravaApi(world: FakeWorld): Promise<FakeStravaAp
   });
 
   app.get<{ Params: { id: string } }>("/api/v3/activities/:id/kudos", (request, reply) => {
-    const a = world.get(Number(request.params.id));
+    const a = world.get(request.params.id);
     return a === undefined ? notFound(reply) : a.kudos;
   });
 
   app.get<{ Params: { id: string } }>("/api/v3/activities/:id/comments", (request, reply) => {
-    const a = world.get(Number(request.params.id));
+    const a = world.get(request.params.id);
     return a === undefined ? notFound(reply) : a.comments;
   });
 
@@ -187,7 +216,7 @@ export async function startFakeStravaApi(world: FakeWorld): Promise<FakeStravaAp
   });
 
   app.get<{ Params: { id: string } }>("/api/v3/uploads/:id", (request, reply) => {
-    const upload = world.pollUpload(Number(request.params.id));
+    const upload = world.pollUpload(request.params.id);
     return upload === undefined
       ? reply.code(404).send({ message: "Not Found" })
       : uploadJson(upload);

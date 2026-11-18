@@ -1,3 +1,4 @@
+import type { StravaId } from "@cameld/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { isRestorable, NotRestorableError } from "../src/state/machine.ts";
 import { groupEvents, listGroups, requireGroup, writesFor } from "../src/state/repo.ts";
@@ -41,7 +42,7 @@ describe("manual restore of a merge", () => {
     expect(after.status).toBe("restored");
     const event = groupEvents(h.db, group.id).at(-1)!;
     expect(event.event).toBe("restored_by_owner");
-    expect((event.evidence as { merged: number }).merged).toBe(group.mergedActivityId);
+    expect((event.evidence as { merged: StravaId }).merged).toBe(group.mergedActivityId);
     expect(writesFor(h.db, { groupId: group.id, kind: "restore_web" })).toHaveLength(2);
     // Terminal: nothing more happens to it.
     h.clock.t += 48 * HOUR;
@@ -126,10 +127,17 @@ describe("manual restore of a merge", () => {
       isRestorable({ ...group, status: "parked", hiddenAt: null, deletedIds: [], uploadId: null }),
     ).toBe(false);
     expect(isRestorable({ ...group, status: "parked", hiddenAt: 1 })).toBe(true);
-    expect(isRestorable({ ...group, status: "parked", hiddenAt: null, deletedIds: [1] })).toBe(
-      true,
-    );
-    expect(isRestorable({ ...group, status: "parked", hiddenAt: null, uploadId: 5 })).toBe(true);
+    expect(
+      isRestorable({
+        ...group,
+        status: "parked",
+        hiddenAt: null,
+        deletedIds: ["9100000000000000001"],
+      }),
+    ).toBe(true);
+    expect(
+      isRestorable({ ...group, status: "parked", hiddenAt: null, uploadId: "9100000000000000005" }),
+    ).toBe(true);
   });
 });
 

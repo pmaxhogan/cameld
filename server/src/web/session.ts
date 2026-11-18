@@ -1,3 +1,4 @@
+import { isStravaId, type StravaId } from "@cameld/shared";
 import { randomUUID } from "node:crypto";
 import { type Browser, chromium, errors as playwrightErrors, type Page } from "playwright-core";
 
@@ -79,7 +80,7 @@ export interface ExportedFile {
 }
 
 export interface EditForm {
-  activityId: number;
+  activityId: StravaId;
   /** CSRF token for request headers (meta tag, else the form token). Never log it. */
   csrfToken: string;
   /** The form's own authenticity_token. Never log it. */
@@ -107,7 +108,7 @@ export interface WebHealth {
 }
 
 export interface DeletionResult {
-  activityId: number;
+  activityId: StravaId;
   confirmedAt: number;
 }
 
@@ -122,7 +123,7 @@ export interface AttachPhotoInput {
   /** When the photo was taken (from the backup's photo metadata). */
   takenAt: Date;
   /** Owner's athlete id (from the API), required by the metadata call. */
-  athleteId: number;
+  athleteId: StravaId;
 }
 
 export interface AttachPhotoResult {
@@ -136,19 +137,22 @@ export interface StravaWebSession {
   health(): Promise<WebHealth>;
   keepAlive(): Promise<WebHealth>;
   login(): Promise<void>;
-  exportOriginal(activityId: number): Promise<ExportedFile>;
-  exportGpx(activityId: number): Promise<ExportedFile>;
-  getEditForm(activityId: number): Promise<EditForm>;
-  setVisibility(activityId: number, visibility: Visibility): Promise<EditFormValues>;
-  setPrivateNote(activityId: number, text: string): Promise<EditFormValues>;
+  exportOriginal(activityId: StravaId): Promise<ExportedFile>;
+  exportGpx(activityId: StravaId): Promise<ExportedFile>;
+  getEditForm(activityId: StravaId): Promise<EditForm>;
+  setVisibility(activityId: StravaId, visibility: Visibility): Promise<EditFormValues>;
+  setPrivateNote(activityId: StravaId, text: string): Promise<EditFormValues>;
   setPerceivedExertion(
-    activityId: number,
+    activityId: StravaId,
     exertion: number | null,
     prefer?: boolean,
   ): Promise<EditFormValues>;
-  deleteActivity(activityId: number, authorization: DeletionAuthorization): Promise<DeletionResult>;
+  deleteActivity(
+    activityId: StravaId,
+    authorization: DeletionAuthorization,
+  ): Promise<DeletionResult>;
   downloadPhoto(url: string): Promise<DownloadedPhoto>;
-  attachPhoto(activityId: number, photo: AttachPhotoInput): Promise<AttachPhotoResult>;
+  attachPhoto(activityId: StravaId, photo: AttachPhotoInput): Promise<AttachPhotoResult>;
   disconnect(): Promise<void>;
 }
 
@@ -221,9 +225,19 @@ export const DEFAULT_ATHLETE_MENU_SELECTOR =
   '[data-log-category="user-menu"], .user-menu, #athlete-menu, [data-testid="user-menu"]';
 const CODE_SENDER = "strava.com";
 
-export function assertId(value: number, what = "activity id"): void {
-  if (!Number.isSafeInteger(value) || value <= 0)
-    throw new RangeError(`${what} must be a positive integer`);
+/** Ids go into URLs and request bodies: only a canonical decimal id may pass. */
+export function assertId(value: StravaId, what = "activity id"): void {
+  if (!isStravaId(value)) throw new RangeError(`${what} must be a positive integer`);
+}
+
+/**
+ * An id as a JSON number literal. The website expects a number here, and
+ * JSON.stringify can only write one from a JavaScript number, which would
+ * round a 64-bit id; JSON.rawJSON writes the digits as they are.
+ */
+function jsonNumber(id: StravaId): unknown {
+  assertId(id, "id");
+  return (JSON as unknown as { rawJSON(text: string): unknown }).rawJSON(id);
 }
 
 function timeoutAfter(ms: number, error: () => Error): { promise: Promise<never>; cancel(): void } {
@@ -414,15 +428,15 @@ export class WebSession implements StravaWebSession {
 
   // ---------------------------------------------------------------- export
 
-  async exportOriginal(activityId: number): Promise<ExportedFile> {
+  async exportOriginal(activityId: StravaId): Promise<ExportedFile> {
     return this.#export(activityId, "export_original", "bin");
   }
 
-  async exportGpx(activityId: number): Promise<ExportedFile> {
+  async exportGpx(activityId: StravaId): Promise<ExportedFile> {
     return this.#export(activityId, "export_gpx", "gpx");
   }
 
-  async #export(activityId: number, action: string, extension: string): Promise<ExportedFile> {
+  async #export(activityId: StravaId, action: string, extension: string): Promise<ExportedFile> {
     assertId(activityId);
     const path = `/activities/${activityId}/${action}`;
     return this.#run(
@@ -453,7 +467,7 @@ export class WebSession implements StravaWebSession {
 
   // ------------------------------------------------------------------ edit
 
-  async getEditForm(activityId: number): Promise<EditForm> {
+  async getEditForm(activityId: StravaId): Promise<EditForm> {
     assertId(activityId);
     return this.#run(
       "get_edit_form",
@@ -463,18 +477,18 @@ export class WebSession implements StravaWebSession {
     );
   }
 
-  async setVisibility(activityId: number, visibility: Visibility): Promise<EditFormValues> {
+  async setVisibility(activityId: StravaId, visibility: Visibility): Promise<EditFormValues> {
     if (!VISIBILITIES.includes(visibility)) throw new RangeError("unknown visibility");
     return this.#update(activityId, "set_visibility", [[FIELD.visibility, visibility]]);
   }
 
-  async setPrivateNote(activityId: number, text: string): Promise<EditFormValues> {
+  async setPrivateNote(activityId: StravaId, text: string): Promise<EditFormValues> {
     return this.#update(activityId, "set_private_note", [[FIELD.privateNote, text]]);
   }
 
   /** `exertion` 1 to 10, or null to clear it. `prefer` uses it over heart-rate effort. */
   async setPerceivedExertion(
-    activityId: number,
+    activityId: StravaId,
     exertion: number | null,
     prefer = true,
   ): Promise<EditFormValues> {
@@ -499,7 +513,7 @@ export class WebSession implements StravaWebSession {
    * is thrown. No field and no value is exempt.
    */
   async #update(
-    activityId: number,
+    activityId: StravaId,
     operation: string,
     changes: FormEntries,
   ): Promise<EditFormValues> {
@@ -563,7 +577,7 @@ export class WebSession implements StravaWebSession {
    * control (a select) on its placeholder value before React sets the real
    * one, and every edit POSTs every entry back.
    */
-  async #readForm(page: Page, activityId: number): Promise<EditForm> {
+  async #readForm(page: Page, activityId: StravaId): Promise<EditForm> {
     const path = `/activities/${activityId}/edit`;
     const activityPath = `/activities/${activityId}`;
     await this.#navigate(page, path);
@@ -678,7 +692,7 @@ export class WebSession implements StravaWebSession {
    * challenged. Callers must also confirm via the API before recording it gone.
    */
   async deleteActivity(
-    activityId: number,
+    activityId: StravaId,
     authorization: DeletionAuthorization,
   ): Promise<DeletionResult> {
     assertId(activityId);
@@ -756,7 +770,7 @@ export class WebSession implements StravaWebSession {
    *    never a challenge (see `#fetch`).
    * 3. save the edit form with `photos[<uuid>][rank|media_type|caption]`
    */
-  async attachPhoto(activityId: number, photo: AttachPhotoInput): Promise<AttachPhotoResult> {
+  async attachPhoto(activityId: StravaId, photo: AttachPhotoInput): Promise<AttachPhotoResult> {
     assertId(activityId);
     assertId(photo.athleteId, "athlete id");
     if (Number.isNaN(photo.takenAt.getTime())) throw new RangeError("takenAt is not a date");
@@ -773,7 +787,7 @@ export class WebSession implements StravaWebSession {
           {
             kind: "json",
             text: JSON.stringify({
-              athlete_id: photo.athleteId,
+              athlete_id: jsonNumber(photo.athleteId),
               uuid,
               // Epoch milliseconds as a JSON number, as the edit page sends
               // File.lastModified. An ISO string is read as its leading year
@@ -848,7 +862,7 @@ export class WebSession implements StravaWebSession {
     operation: string,
     timeoutMs: number,
     work: (page: Page) => Promise<T>,
-    activityId?: number,
+    activityId?: StravaId,
   ): Promise<T> {
     const queuedAt = Date.now();
     const result = this.#queue.then(() =>
@@ -862,7 +876,7 @@ export class WebSession implements StravaWebSession {
     operation: string,
     timeoutMs: number,
     work: (page: Page) => Promise<T>,
-    activityId: number | undefined,
+    activityId: StravaId | undefined,
     queuedAt: number,
   ): Promise<T> {
     // `seq` numbers the operations of this process, so the lines of one

@@ -7,6 +7,7 @@ import {
   readFitActivity,
   readGpxActivity,
   readTcxActivity,
+  type StravaId,
 } from "@cameld/shared";
 import { BackupIntegrityError, sha256Hex, verify, writeOnce } from "../backup-store.ts";
 import type { Logger } from "../logging.ts";
@@ -18,6 +19,7 @@ import {
   upsertActivity,
 } from "../state/repo.ts";
 import { StravaApiError, type StravaClient } from "../strava/client.ts";
+import { parseStravaJson } from "../strava/json.ts";
 import type { StravaDetailedActivity, StravaPhoto, UploadDataType } from "../strava/types.ts";
 import {
   ChallengeError,
@@ -113,7 +115,7 @@ export interface BackupOptions {
 }
 
 export interface BackupOutcome {
-  activityId: number;
+  activityId: StravaId;
   written: number;
   /** The original file is stored, still to come, or Strava has none. */
   originalStatus: OriginalStatus;
@@ -143,6 +145,9 @@ export function safeFilename(name: string): string {
   const cleaned = base.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "");
   return (cleaned === "" ? "original" : cleaned).slice(-120);
 }
+
+/** backup_files.activity_id of a file that belongs to no activity (merge artifacts). */
+const NO_ACTIVITY: StravaId = "0";
 
 function json(value: unknown): Buffer {
   return Buffer.from(`${JSON.stringify(value, null, 2)}\n`, "utf8");
@@ -189,7 +194,7 @@ export async function readVerifiedFile(root: string, relPath: string): Promise<B
 export async function readStoredOriginal(
   db: DatabaseSync,
   root: string,
-  activityId: number,
+  activityId: StravaId,
 ): Promise<StoredOriginal | null> {
   const activity = requireActivity(db, activityId);
   if (activity.originalStatus !== "present" || activity.originalPath === null) return null;
@@ -226,7 +231,7 @@ export class BackupService {
     this.#exportsPerHour = options.exportsPerHour ?? DEFAULT_EXPORTS_PER_HOUR;
   }
 
-  #has(activityId: number, kind: string): boolean {
+  #has(activityId: StravaId, kind: string): boolean {
     return (
       this.#db
         .prepare("SELECT 1 FROM backup_files WHERE activity_id = ? AND kind = ? LIMIT 1")
@@ -236,7 +241,7 @@ export class BackupService {
 
   /** Write one file (write-once) and record it. Returns true if new bytes were written. */
   async #store(
-    activityId: number,
+    activityId: StravaId,
     kind: string,
     relPath: string,
     bytes: Uint8Array,
@@ -252,7 +257,7 @@ export class BackupService {
   }
 
   /** Store a JSON document under a content-addressed name in `dir`. */
-  #storeJson(activityId: number, kind: string, dir: string, prefix: string, value: unknown) {
+  #storeJson(activityId: StravaId, kind: string, dir: string, prefix: string, value: unknown) {
     const bytes = json(value);
     return this.#store(activityId, kind, `${dir}/${prefix}${short(bytes)}.json`, bytes);
   }
@@ -260,7 +265,7 @@ export class BackupService {
   /** Store a merge artifact (merged FIT, ledger, report) under merges/<groupId>/. */
   async storeMergeArtifact(groupId: string, name: string, bytes: Uint8Array): Promise<string> {
     const relPath = `merges/${groupId}/${name}`;
-    await this.#store(0, `merge_${name}`, relPath, bytes);
+    await this.#store(NO_ACTIVITY, `merge_${name}`, relPath, bytes);
     return relPath;
   }
 
@@ -273,7 +278,7 @@ export class BackupService {
    * null. With `beforeMs`, only copies stored before that instant count (for
    * example the visibility an activity had before cameld hid it).
    */
-  async latestJson<T>(activityId: number, kind: string, beforeMs?: number): Promise<T | null> {
+  async latestJson<T>(activityId: StravaId, kind: string, beforeMs?: number): Promise<T | null> {
     const row = this.#db
       .prepare(
         "SELECT rel_path FROM backup_files WHERE activity_id = ? AND kind = ? AND created_at < ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
@@ -281,15 +286,16 @@ export class BackupService {
       .get(activityId, kind, beforeMs ?? Number.MAX_SAFE_INTEGER) as
       { rel_path: string } | undefined;
     if (row === undefined) return null;
-    return JSON.parse((await this.readVerified(row.rel_path)).toString("utf8")) as T;
+    // Stored API bodies carry ids: parse them the way the client does.
+    return parseStravaJson((await this.readVerified(row.rel_path)).toString("utf8")) as T;
   }
 
-  async readOriginal(activityId: number): Promise<StoredOriginal | null> {
+  async readOriginal(activityId: StravaId): Promise<StoredOriginal | null> {
     return readStoredOriginal(this.#db, this.#root, activityId);
   }
 
   /** Photo files of an activity: [relPath, unique id]. */
-  photoFiles(activityId: number): { relPath: string; uniqueId: string }[] {
+  photoFiles(activityId: StravaId): { relPath: string; uniqueId: string }[] {
     const rows = this.#db
       .prepare(
         "SELECT rel_path FROM backup_files WHERE activity_id = ? AND kind = 'photo' ORDER BY rel_path",
@@ -302,7 +308,7 @@ export class BackupService {
   }
 
   /** Re-read every recorded file of the activity and check its checksum. */
-  async verifyActivity(activityId: number): Promise<{ ok: boolean; failures: string[] }> {
+  async verifyActivity(activityId: StravaId): Promise<{ ok: boolean; failures: string[] }> {
     const rows = this.#db
       .prepare("SELECT rel_path FROM backup_files WHERE activity_id = ?")
       .all(activityId) as { rel_path: string }[];
@@ -322,7 +328,7 @@ export class BackupService {
   }
 
   /** Back up one activity. See the module comment. */
-  async backupActivity(activityId: number, options: BackupOptions = {}): Promise<BackupOutcome> {
+  async backupActivity(activityId: StravaId, options: BackupOptions = {}): Promise<BackupOutcome> {
     const fresh = options.fresh ?? false;
     const startedAt = this.#now();
     const read = (): void => options.gate?.beforeRead();
@@ -429,7 +435,7 @@ export class BackupService {
     };
   }
 
-  async #backupPhoto(activityId: number, dir: string, photo: StravaPhoto): Promise<boolean> {
+  async #backupPhoto(activityId: StravaId, dir: string, photo: StravaPhoto): Promise<boolean> {
     const id = safeFilename(String(photo.unique_id ?? ""));
     const url = Object.entries(photo.urls ?? {}).sort(
       (a, b) => Number(b[0]) - Number(a[0]),
@@ -448,7 +454,7 @@ export class BackupService {
     }
   }
 
-  #markUnavailable(activityId: number, evidence: Record<string, unknown>): void {
+  #markUnavailable(activityId: StravaId, evidence: Record<string, unknown>): void {
     setActivityFields(this.#db, activityId, {
       original_status: "unavailable",
       original_next_attempt_at: null,
@@ -478,7 +484,7 @@ export class BackupService {
     return false;
   }
 
-  async #backupOriginal(activityId: number, dir: string, attempts: number): Promise<boolean> {
+  async #backupOriginal(activityId: StravaId, dir: string, attempts: number): Promise<boolean> {
     this.#exports.push(this.#now());
     try {
       const file = await this.#web.run((session) => session.exportOriginal(activityId));
@@ -542,7 +548,7 @@ export class BackupService {
     }
   }
 
-  async #backupWebForm(activityId: number, dir: string): Promise<boolean> {
+  async #backupWebForm(activityId: StravaId, dir: string): Promise<boolean> {
     try {
       const form = await this.#web.run((session) => session.getEditForm(activityId));
       const isNew = await this.#storeJson(

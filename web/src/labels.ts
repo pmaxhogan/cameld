@@ -1,4 +1,4 @@
-import type { BackfillBatchInfo, BudgetWindow, GroupSummary } from "@cameld/shared";
+import type { BackfillBatchInfo, BudgetWindow, GroupSummary, StravaId } from "@cameld/shared";
 import { fmtDate, NONE } from "./format.ts";
 
 /**
@@ -206,8 +206,8 @@ export function lastErrorLabel(marker: string | null): string {
 }
 
 /** Link to an activity on strava.com. */
-export function stravaActivityUrl(id: number): string {
-  return `https://www.strava.com/activities/${String(id)}`;
+export function stravaActivityUrl(id: StravaId): string {
+  return `https://www.strava.com/activities/${id}`;
 }
 
 /** "2026-01-02 Run, 1 phone + 1 wrist recording" for titles and lists. */

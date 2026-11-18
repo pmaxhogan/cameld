@@ -1,4 +1,6 @@
+import { isStravaId, type StravaId } from "@cameld/shared";
 import type { Logger } from "../logging.ts";
+import { parseStravaJson } from "./json.ts";
 import { type Clock, type RateLimiter, type RequestKind, systemClock } from "./rate-limiter.ts";
 import {
   type CreateUploadParams,
@@ -35,8 +37,8 @@ export class StravaRateLimitedError extends StravaApiError {
 
 export class UploadTimeoutError extends Error {
   override readonly name = "UploadTimeoutError";
-  readonly uploadId: number;
-  constructor(uploadId: number) {
+  readonly uploadId: StravaId;
+  constructor(uploadId: StravaId) {
     super(`Strava upload ${uploadId} was still processing when polling stopped`);
     this.uploadId = uploadId;
   }
@@ -75,9 +77,10 @@ const DUPLICATE_PLAIN = /duplicate of activity (\d+)/i;
 const DUPLICATE_LINK =
   /duplicate of\s*<a\b[^>]*?\bhref\s*=\s*["']?(?:https?:\/\/[^/"'\s>]+)?\/activities\/(\d+)/i;
 
-function toId(digits: string): number | null {
-  const id = Number.parseInt(digits, 10);
-  return Number.isSafeInteger(id) && id > 0 ? id : null;
+/** The id as written (never through a number: a 64-bit id would be rounded). */
+function toId(digits: string): StravaId | null {
+  const id = digits.replace(/^0+(?=\d)/, "");
+  return isStravaId(id) ? id : null;
 }
 
 /**
@@ -85,7 +88,7 @@ function toId(digits: string): number | null {
  * form Strava uses: plain text ("duplicate of activity 123") or an HTML link
  * ("duplicate of <a href='/activities/123'>Evening Walk</a>").
  */
-export function parseDuplicateOf(error: string | null | undefined): number | null {
+export function parseDuplicateOf(error: string | null | undefined): StravaId | null {
   if (error === null || error === undefined) return null;
   const match = DUPLICATE_LINK.exec(error) ?? DUPLICATE_PLAIN.exec(error);
   return match === null ? null : toId(match[1] as string);
@@ -173,7 +176,8 @@ export class StravaClient {
         throw new StravaApiError(response.status, path, detail);
       }
       this.#log?.debug(seen, "strava api request");
-      return (await response.json()) as T;
+      // Never response.json(): it rounds 64-bit ids (see json.ts).
+      return parseStravaJson(await response.text()) as T;
     }
   }
 
@@ -189,31 +193,31 @@ export class StravaClient {
     return this.#get("/athlete/activities", { ...params });
   }
 
-  getActivity(id: number, includeAllEfforts = false): Promise<StravaDetailedActivity> {
+  getActivity(id: StravaId, includeAllEfforts = false): Promise<StravaDetailedActivity> {
     return this.#get(`/activities/${id}`, { include_all_efforts: includeAllEfforts });
   }
 
-  getStreams(id: number, keys: readonly StreamKey[] = STREAM_KEYS): Promise<StravaStreams> {
+  getStreams(id: StravaId, keys: readonly StreamKey[] = STREAM_KEYS): Promise<StravaStreams> {
     return this.#get(`/activities/${id}/streams`, { keys: keys.join(","), key_by_type: true });
   }
 
-  getActivityPhotos(id: number, size = 2048): Promise<StravaPhoto[]> {
+  getActivityPhotos(id: StravaId, size = 2048): Promise<StravaPhoto[]> {
     return this.#get(`/activities/${id}/photos`, { photo_sources: true, size });
   }
 
-  getKudoers(id: number): Promise<StravaKudoer[]> {
+  getKudoers(id: StravaId): Promise<StravaKudoer[]> {
     return this.#get(`/activities/${id}/kudos`);
   }
 
-  getComments(id: number): Promise<StravaComment[]> {
+  getComments(id: StravaId): Promise<StravaComment[]> {
     return this.#get(`/activities/${id}/comments`);
   }
 
-  getLaps(id: number): Promise<StravaLap[]> {
+  getLaps(id: StravaId): Promise<StravaLap[]> {
     return this.#get(`/activities/${id}/laps`);
   }
 
-  updateActivity(id: number, fields: UpdateActivityFields): Promise<StravaDetailedActivity> {
+  updateActivity(id: StravaId, fields: UpdateActivityFields): Promise<StravaDetailedActivity> {
     return this.#request("PUT", `/activities/${id}`, {
       body: JSON.stringify(fields),
       contentType: "application/json",
@@ -231,7 +235,7 @@ export class StravaClient {
     return this.#request("POST", "/uploads", { body: form });
   }
 
-  getUpload(id: number): Promise<StravaUpload> {
+  getUpload(id: StravaId): Promise<StravaUpload> {
     return this.#get(`/uploads/${id}`);
   }
 

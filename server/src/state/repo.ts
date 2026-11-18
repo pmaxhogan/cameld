@@ -1,5 +1,5 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
-import { classifySource, type RecordingSource } from "@cameld/shared";
+import { classifySource, type RecordingSource, type StravaId, toStravaId } from "@cameld/shared";
 import type { StravaSummaryActivity } from "../strava/types.ts";
 
 /**
@@ -14,7 +14,7 @@ export const MERGE_EXTERNAL_ID_PREFIX = "cameld-merge-";
 export type OriginalStatus = "pending" | "present" | "unavailable";
 
 export interface ActivityRow {
-  id: number;
+  id: StravaId;
   name: string | null;
   sportType: string | null;
   startMs: number;
@@ -37,15 +37,58 @@ export interface ActivityRow {
   webFormSaved: boolean;
   singleAt: number | null;
   goneAt: number | null;
-  restoredAs: number | null;
-  restoredFrom: number | null;
+  restoredAs: StravaId | null;
+  restoredFrom: StravaId | null;
 }
 
 type Row = Record<string, SQLInputValue>;
 
+/**
+ * Read rows whose INTEGER columns may hold Strava ids. SQLite stores them as
+ * exact 64-bit integers, but node:sqlite refuses to return an integer above
+ * 2^53 - 1 as a number, so the statement reads integers as bigint: the
+ * columns in `idColumns` become decimal strings (StravaId) and every other
+ * integer (times, counts, flags) is a number again. Writing needs no helper:
+ * a decimal string binds into a STRICT INTEGER column as that exact integer.
+ */
+export function exactRows(
+  db: DatabaseSync,
+  sql: string,
+  idColumns: readonly string[],
+  ...params: SQLInputValue[]
+): Row[] {
+  const statement = db.prepare(sql);
+  statement.setReadBigInts(true);
+  return statement.all(...params).map((row) => {
+    const out: Row = {};
+    for (const [key, value] of Object.entries(row)) {
+      if (typeof value !== "bigint") out[key] = value;
+      else out[key] = idColumns.includes(key) ? value.toString() : Number(value);
+    }
+    return out;
+  });
+}
+
+/** The `id` column of an activities query, exact (see exactRows). */
+export function activityIds(db: DatabaseSync, sql: string, ...params: SQLInputValue[]): StravaId[] {
+  return exactRows(db, sql, ["id"], ...params).map((row) => row.id as StravaId);
+}
+
+/**
+ * A stored JSON list of ids. Rows written before ids were strings hold
+ * (still exact) numbers; both forms read as the same StravaId.
+ */
+function idList(json: SQLInputValue | undefined): StravaId[] {
+  return (JSON.parse(json as string) as unknown[]).map((id) => toStravaId(id));
+}
+
+const ACTIVITY_ID_COLUMNS = ["id", "restored_as", "restored_from"];
+const GROUP_ID_COLUMNS = ["upload_id", "merged_activity_id"];
+const WRITE_ID_COLUMNS = ["target_id", "upload_id"];
+
 function toActivity(row: Row): ActivityRow {
   return {
-    id: row.id as number,
+    id: row.id as StravaId,
     name: row.name as string | null,
     sportType: row.sport_type as string | null,
     startMs: row.start_ms as number,
@@ -65,8 +108,8 @@ function toActivity(row: Row): ActivityRow {
     webFormSaved: row.web_form_saved === 1,
     singleAt: row.single_at as number | null,
     goneAt: row.gone_at as number | null,
-    restoredAs: row.restored_as as number | null,
-    restoredFrom: row.restored_from as number | null,
+    restoredAs: row.restored_as as StravaId | null,
+    restoredFrom: row.restored_from as StravaId | null,
   };
 }
 
@@ -139,27 +182,30 @@ export function upsertActivity(
   return false;
 }
 
-export function getActivity(db: DatabaseSync, id: number): ActivityRow | null {
-  const row = db.prepare("SELECT * FROM activities WHERE id = ?").get(id) as Row | undefined;
+export function getActivity(db: DatabaseSync, id: StravaId): ActivityRow | null {
+  const [row] = exactRows(db, "SELECT * FROM activities WHERE id = ?", ACTIVITY_ID_COLUMNS, id);
   return row === undefined ? null : toActivity(row);
 }
 
-export function requireActivity(db: DatabaseSync, id: number): ActivityRow {
+export function requireActivity(db: DatabaseSync, id: StravaId): ActivityRow {
   const row = getActivity(db, id);
   if (row === null) throw new Error(`activity ${id} is not known`);
   return row;
 }
 
 export function activitiesBetween(db: DatabaseSync, fromMs: number, toMs: number): ActivityRow[] {
-  const rows = db
-    .prepare("SELECT * FROM activities WHERE end_ms >= ? AND start_ms <= ? ORDER BY start_ms, id")
-    .all(fromMs, toMs) as Row[];
-  return rows.map(toActivity);
+  return exactRows(
+    db,
+    "SELECT * FROM activities WHERE end_ms >= ? AND start_ms <= ? ORDER BY start_ms, id",
+    ACTIVITY_ID_COLUMNS,
+    fromMs,
+    toMs,
+  ).map(toActivity);
 }
 
 export function setActivityFields(
   db: DatabaseSync,
-  id: number,
+  id: StravaId,
   fields: Partial<Record<string, SQLInputValue>>,
 ): void {
   const keys = Object.keys(fields);
@@ -230,23 +276,23 @@ export interface GroupRow {
   id: string;
   status: GroupStatus;
   path: MergePath | null;
-  appIds: number[];
-  fitbitIds: number[];
+  appIds: StravaId[];
+  fitbitIds: StravaId[];
   startMs: number;
   match: unknown;
   offsetSeconds: number;
   mergedPath: string | null;
   mergedSha256: string | null;
   externalId: string;
-  uploadId: number | null;
-  mergedActivityId: number | null;
+  uploadId: StravaId | null;
+  mergedActivityId: StravaId | null;
   snapshot: string | null;
   parkedReason: string | null;
   resumeStatus: GroupStatus | null;
   hiddenAt: number | null;
   trial: boolean;
   photosFlagged: boolean;
-  deletedIds: number[];
+  deletedIds: StravaId[];
   lastError: string | null;
   createdAt: number;
   updatedAt: number;
@@ -257,23 +303,23 @@ function toGroup(row: Row): GroupRow {
     id: row.id as string,
     status: row.status as GroupStatus,
     path: row.path as MergePath | null,
-    appIds: JSON.parse(row.app_ids as string) as number[],
-    fitbitIds: JSON.parse(row.fitbit_ids as string) as number[],
+    appIds: idList(row.app_ids),
+    fitbitIds: idList(row.fitbit_ids),
     startMs: row.start_ms as number,
     match: row.match_json === null ? null : (JSON.parse(row.match_json as string) as unknown),
     offsetSeconds: row.offset_seconds as number,
     mergedPath: row.merged_path as string | null,
     mergedSha256: row.merged_sha256 as string | null,
     externalId: row.external_id as string,
-    uploadId: row.upload_id as number | null,
-    mergedActivityId: row.merged_activity_id as number | null,
+    uploadId: row.upload_id as StravaId | null,
+    mergedActivityId: row.merged_activity_id as StravaId | null,
     snapshot: row.snapshot as string | null,
     parkedReason: row.parked_reason as string | null,
     resumeStatus: row.resume_status as GroupStatus | null,
     hiddenAt: row.hidden_at as number | null,
     trial: row.trial === 1,
     photosFlagged: row.photos_flagged === 1,
-    deletedIds: JSON.parse(row.deleted_ids as string) as number[],
+    deletedIds: idList(row.deleted_ids),
     lastError: row.last_error as string | null,
     createdAt: row.created_at as number,
     updatedAt: row.updated_at as number,
@@ -282,7 +328,7 @@ function toGroup(row: Row): GroupRow {
 
 export function insertGroup(
   db: DatabaseSync,
-  group: { id: string; appIds: number[]; fitbitIds: number[]; startMs: number },
+  group: { id: string; appIds: StravaId[]; fitbitIds: StravaId[]; startMs: number },
   now: number,
 ): GroupRow {
   db.prepare(
@@ -305,7 +351,7 @@ export function insertGroup(
 }
 
 export function getGroup(db: DatabaseSync, id: string): GroupRow | null {
-  const row = db.prepare("SELECT * FROM merge_groups WHERE id = ?").get(id) as Row | undefined;
+  const [row] = exactRows(db, "SELECT * FROM merge_groups WHERE id = ?", GROUP_ID_COLUMNS, id);
   return row === undefined ? null : toGroup(row);
 }
 
@@ -316,16 +362,16 @@ export function requireGroup(db: DatabaseSync, id: string): GroupRow {
 }
 
 export function listGroups(db: DatabaseSync, statuses?: readonly GroupStatus[]): GroupRow[] {
-  const rows = (
+  const rows =
     statuses === undefined
-      ? db.prepare("SELECT * FROM merge_groups ORDER BY start_ms, id").all()
-      : db
-          .prepare(
-            `SELECT * FROM merge_groups WHERE status IN (${statuses.map(() => "?").join(",")})
-             ORDER BY start_ms, id`,
-          )
-          .all(...statuses)
-  ) as Row[];
+      ? exactRows(db, "SELECT * FROM merge_groups ORDER BY start_ms, id", GROUP_ID_COLUMNS)
+      : exactRows(
+          db,
+          `SELECT * FROM merge_groups WHERE status IN (${statuses.map(() => "?").join(",")})
+           ORDER BY start_ms, id`,
+          GROUP_ID_COLUMNS,
+          ...statuses,
+        );
   return rows.map(toGroup);
 }
 
@@ -476,10 +522,10 @@ export interface WriteRow {
   id: number;
   groupId: string | null;
   kind: WriteKind;
-  targetId: number | null;
+  targetId: StravaId | null;
   externalId: string | null;
   status: WriteStatus;
-  uploadId: number | null;
+  uploadId: StravaId | null;
   result: unknown;
   createdAt: number;
   completedAt: number | null;
@@ -490,10 +536,10 @@ function toWrite(row: Row): WriteRow {
     id: row.id as number,
     groupId: row.group_id as string | null,
     kind: row.kind as WriteKind,
-    targetId: row.target_id as number | null,
+    targetId: row.target_id as StravaId | null,
     externalId: row.external_id as string | null,
     status: row.status as WriteStatus,
-    uploadId: row.upload_id as number | null,
+    uploadId: row.upload_id as StravaId | null,
     result: row.result === null ? null : (JSON.parse(row.result as string) as unknown),
     createdAt: row.created_at as number,
     completedAt: row.completed_at as number | null,
@@ -502,7 +548,12 @@ function toWrite(row: Row): WriteRow {
 
 export function beginWrite(
   db: DatabaseSync,
-  write: { groupId: string | null; kind: WriteKind; targetId: number | null; externalId?: string },
+  write: {
+    groupId: string | null;
+    kind: WriteKind;
+    targetId: StravaId | null;
+    externalId?: string;
+  },
   now: number,
 ): number {
   const result = db
@@ -514,7 +565,7 @@ export function beginWrite(
   return Number(result.lastInsertRowid);
 }
 
-export function setWriteUploadId(db: DatabaseSync, id: number, uploadId: number): void {
+export function setWriteUploadId(db: DatabaseSync, id: number, uploadId: StravaId): void {
   db.prepare("UPDATE strava_writes SET upload_id = ? WHERE id = ?").run(uploadId, id);
 }
 
@@ -534,23 +585,23 @@ export function finishWrite(
 }
 
 export function openWrites(db: DatabaseSync): WriteRow[] {
-  const rows = db
-    .prepare(
-      "SELECT * FROM strava_writes WHERE status IN ('intent', 'unknown', 'sent') ORDER BY id",
-    )
-    .all() as Row[];
-  return rows.map(toWrite);
+  return exactRows(
+    db,
+    "SELECT * FROM strava_writes WHERE status IN ('intent', 'unknown', 'sent') ORDER BY id",
+    WRITE_ID_COLUMNS,
+  ).map(toWrite);
 }
 
 export function writesFor(
   db: DatabaseSync,
   filter: { groupId?: string; kind?: WriteKind },
 ): WriteRow[] {
-  const rows = db
-    .prepare(
-      `SELECT * FROM strava_writes WHERE (?1 IS NULL OR group_id = ?1) AND (?2 IS NULL OR kind = ?2)
-       ORDER BY id`,
-    )
-    .all(filter.groupId ?? null, filter.kind ?? null) as Row[];
-  return rows.map(toWrite);
+  return exactRows(
+    db,
+    `SELECT * FROM strava_writes WHERE (?1 IS NULL OR group_id = ?1) AND (?2 IS NULL OR kind = ?2)
+     ORDER BY id`,
+    WRITE_ID_COLUMNS,
+    filter.groupId ?? null,
+    filter.kind ?? null,
+  ).map(toWrite);
 }

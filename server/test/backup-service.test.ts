@@ -1,3 +1,4 @@
+import type { StravaId } from "@cameld/shared";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { writeFitActivity } from "@cameld/shared";
@@ -120,10 +121,10 @@ describe("BackupService", () => {
       db: h.db,
       api: {
         ...h.client,
-        getActivity: (id: number) => h.client.getActivity(id),
-        getStreams: (id: number) => h.client.getStreams(id),
-        getKudoers: (id: number) => h.client.getKudoers(id),
-        getComments: (id: number) => h.client.getComments(id),
+        getActivity: (id: StravaId) => h.client.getActivity(id),
+        getStreams: (id: StravaId) => h.client.getStreams(id),
+        getKudoers: (id: StravaId) => h.client.getKudoers(id),
+        getComments: (id: StravaId) => h.client.getComments(id),
         getActivityPhotos: () =>
           Promise.resolve([{ unique_id: "x" }, { urls: { "1": "http://x.invalid" } }]),
       },
@@ -189,12 +190,15 @@ describe("BackupService", () => {
     const outcome = await h.backup.backupActivity(single.id);
     expect(outcome.verified).toBe(false);
     expect(outcome.failures[0]).toMatch(/missing-file/);
-    expect(await h.backup.verifyActivity(424242)).toEqual({ ok: false, failures: [] });
+    expect(await h.backup.verifyActivity("9100000000000424242")).toEqual({
+      ok: false,
+      failures: [],
+    });
   });
 });
 
 describe("original file exports", () => {
-  const exportCalls = (id: number): number =>
+  const exportCalls = (id: StravaId): number =>
     h.session.calls.filter((c) => c.op === "export_original" && c.id === id).length;
   const MINUTE = 60 * 1000;
 
@@ -208,10 +212,16 @@ describe("original file exports", () => {
   });
 
   it("reads 'no original' from the detail: manual, or an explicit null upload_id", () => {
-    const base = { id: 1, name: "x", sport_type: "Run" } as StravaDetailedActivity;
+    const base = {
+      id: "9100000000000000001",
+      name: "x",
+      sport_type: "Run",
+    } as StravaDetailedActivity;
     expect(noOriginalReason(null)).toBeNull();
     expect(noOriginalReason(base)).toBeNull();
-    expect(noOriginalReason({ ...base, manual: false, upload_id: 7 })).toBeNull();
+    expect(
+      noOriginalReason({ ...base, manual: false, upload_id: "9100000000000000007" }),
+    ).toBeNull();
     expect(noOriginalReason({ ...base, manual: true, upload_id: null })).toBe("manual");
     expect(noOriginalReason({ ...base, manual: false, upload_id: null })).toBe("no_upload_id");
   });
@@ -341,9 +351,9 @@ describe("original file exports", () => {
       size: 42,
     };
     const session = {
-      exportOriginal: (id: number) =>
+      exportOriginal: (id: StravaId) =>
         Promise.reject(new WebNoFileError(`/activities/${id}/export_original`, response)),
-      getEditForm: (id: number) => h.session.getEditForm(id),
+      getEditForm: (id: StravaId) => h.session.getEditForm(id),
     } as unknown as StravaWebSession;
     const backup = new BackupService({
       db: h.db,

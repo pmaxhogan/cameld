@@ -1,6 +1,8 @@
 import { randomBytes, randomInt } from "node:crypto";
+import type { StravaId } from "@cameld/shared";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 
+import { parseStravaJson } from "../../src/strava/json.ts";
 import { type FakeActivity, SYNTHETIC_PNG, syntheticActivities } from "./fixtures.ts";
 
 /**
@@ -81,6 +83,8 @@ export interface RecordedRequest {
   path: string;
   /** Form entries for urlencoded bodies, parsed JSON, or byte length. */
   body: unknown;
+  /** The JSON text as received, for JSON bodies (the parsed body keeps 64-bit ids exact). */
+  rawJson?: string;
   contentType: string | undefined;
 }
 
@@ -106,7 +110,7 @@ export interface FakeStrava {
   styleMs: number;
   /** stale_after_save: how many edit page loads after a save are stale. */
   staleLoads: number;
-  activities: Map<number, FakeActivity>;
+  activities: Map<StravaId, FakeActivity>;
   requests: RecordedRequest[];
   /** Login codes "emailed" by request_otp, newest last. */
   mailbox: { code: string; at: number }[];
@@ -318,7 +322,7 @@ export async function startFakeStrava(): Promise<FakeStrava> {
   const sessions = new Map<string, string>(); // session id -> csrf token
   const uploads = new Map<string, PendingUpload>();
   const uploaded = new Set<string>();
-  const stale = new Map<number, number>(); // activity id -> stale edit page loads left
+  const stale = new Map<StravaId, number>(); // activity id -> stale edit page loads left
   let pendingCode: string | null = null;
 
   const fake: FakeStrava = {
@@ -340,6 +344,17 @@ export async function startFakeStrava(): Promise<FakeStrava> {
     close: () => app.close(),
   };
 
+  // JSON.parse would round a 64-bit id sent as a bare integer: read ids exactly.
+  const rawJson = new WeakMap<object, string>();
+  app.removeContentTypeParser("application/json");
+  app.addContentTypeParser("application/json", { parseAs: "string" }, (req, body, done) => {
+    rawJson.set(req, body as string);
+    try {
+      done(null, parseStravaJson(body as string));
+    } catch (error) {
+      done(error as Error, undefined);
+    }
+  });
   app.addContentTypeParser(
     "application/x-www-form-urlencoded",
     { parseAs: "string" },
@@ -355,6 +370,7 @@ export async function startFakeStrava(): Promise<FakeStrava> {
       method: request.method,
       path: request.url.split("?")[0] as string,
       body: Buffer.isBuffer(request.body) ? request.body.length : request.body,
+      ...(rawJson.has(request) ? { rawJson: rawJson.get(request) as string } : {}),
       contentType: request.headers["content-type"],
     });
   });
@@ -400,7 +416,7 @@ export async function startFakeStrava(): Promise<FakeStrava> {
   }
 
   function activityOr404(id: string, reply: FastifyReply): FakeActivity | null {
-    const activity = fake.activities.get(Number(id));
+    const activity = fake.activities.get(id);
     if (activity?.redirectWhenGone === true) {
       void reply.redirect("/features");
       return null;

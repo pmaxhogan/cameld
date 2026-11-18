@@ -1,3 +1,4 @@
+import type { StravaId } from "@cameld/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { beginWrite, groupEvents, listGroups, requireGroup, writesFor } from "../src/state/repo.ts";
 import type { DeletionAuthorization } from "../src/web/deletion-authorization.ts";
@@ -149,7 +150,7 @@ describe("crash and resume: a delete is never repeated", () => {
     addOuting(h.world);
     const original = h.session.deleteActivity.bind(h.session);
     const open: number[] = [];
-    h.session.deleteActivity = (id: number, auth: DeletionAuthorization) => {
+    h.session.deleteActivity = (id: StravaId, auth: DeletionAuthorization) => {
       open.push(
         writesFor(h.db, { kind: "delete" }).filter(
           (w) => w.status === "intent" && w.targetId === id,
@@ -254,9 +255,21 @@ describe("crash and resume: other intents", () => {
     addOuting(h.world);
     await h.poller.poll();
     const group = listGroups(h.db)[0]!;
-    beginWrite(h.db, { groupId: group.id, kind: "photo", targetId: 1, externalId: "x:y" }, 0);
-    beginWrite(h.db, { groupId: group.id, kind: "private_note", targetId: 1 }, 0);
-    beginWrite(h.db, { groupId: null, kind: "photo", targetId: 1, externalId: "x:z" }, 0);
+    beginWrite(
+      h.db,
+      { groupId: group.id, kind: "photo", targetId: "9100000000000000001", externalId: "x:y" },
+      0,
+    );
+    beginWrite(
+      h.db,
+      { groupId: group.id, kind: "private_note", targetId: "9100000000000000001" },
+      0,
+    );
+    beginWrite(
+      h.db,
+      { groupId: null, kind: "photo", targetId: "9100000000000000001", externalId: "x:z" },
+      0,
+    );
     await h.machine.reconcile();
     expect(writesFor(h.db, { kind: "photo" }).map((w) => w.status)).toEqual(["failed", "failed"]);
     expect(writesFor(h.db, { kind: "private_note" })[0]?.status).toBe("superseded");

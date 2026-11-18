@@ -1,3 +1,4 @@
+import type { StravaId } from "@cameld/shared";
 import { Writable } from "node:stream";
 import { type Browser, chromium } from "playwright-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -79,7 +80,7 @@ async function logIn(): Promise<void> {
   await page.close();
 }
 
-function authorize(activityId: number): DeletionAuthorization {
+function authorize(activityId: StravaId): DeletionAuthorization {
   return DeletionAuthorization.mint({
     activityId,
     deletionSwitch: "on",
@@ -207,7 +208,9 @@ describe("export", () => {
     expect((error as WebNoFileError).response.size).toBeGreaterThan(0);
     expect((error as Error).message).toMatch(/did not return a file \(200 text\/html/);
     fake.mode = "normal";
-    await expect(session.exportOriginal(1234)).rejects.toBeInstanceOf(WebNotFoundError);
+    await expect(session.exportOriginal("9100000000000001234")).rejects.toBeInstanceOf(
+      WebNotFoundError,
+    );
   });
 });
 
@@ -278,8 +281,8 @@ describe("edit form", () => {
     await expect(
       session.setVisibility(RIDE_ID, "public" as unknown as "only_me"),
     ).rejects.toBeInstanceOf(RangeError);
-    await expect(session.getEditForm(-1)).rejects.toBeInstanceOf(RangeError);
-    await expect(session.exportOriginal(1.5)).rejects.toBeInstanceOf(RangeError);
+    await expect(session.getEditForm("-1")).rejects.toBeInstanceOf(RangeError);
+    await expect(session.exportOriginal("1.5")).rejects.toBeInstanceOf(RangeError);
     expect(fake.requests).toEqual([]);
   });
 
@@ -789,6 +792,8 @@ describe("photos", () => {
       // Epoch ms as a number, like the edit page's File.lastModified.
       taken_at: Date.UTC(2030, 3, 1, 6, 5, 0),
     });
+    // On the wire the athlete id is a bare integer (not a string, not a rounded double).
+    expect(metadata?.rawJson).toContain(`"athlete_id":${SYNTHETIC_ATHLETE_ID}`);
     const upload = fake.requests.find(
       (r) => r.method === "PUT" && r.path === `/upload-bucket/${result.uuid}`,
     );
@@ -881,7 +886,7 @@ describe("photos", () => {
     expect(fake.requests.some((r) => r.path.startsWith("/upload-bucket/"))).toBe(false);
     fake.mode = "hide_new_photos";
     expect((await session.attachPhoto(RUN_ID, photo)).verified).toBe(false);
-    await expect(session.attachPhoto(RUN_ID, { ...photo, athleteId: 0 })).rejects.toBeInstanceOf(
+    await expect(session.attachPhoto(RUN_ID, { ...photo, athleteId: "0" })).rejects.toBeInstanceOf(
       RangeError,
     );
     await expect(

@@ -8,6 +8,7 @@ import {
   readFitActivity,
   suggestedOffsetSeconds,
   type TrackLine,
+  type StravaId,
 } from "@cameld/shared";
 import { readStoredOriginal, readVerifiedFile } from "../service/backup.ts";
 import { buildMerge } from "../state/build.ts";
@@ -63,7 +64,7 @@ export async function groupTracks(
     readOriginal: (id) => readStoredOriginal(db, backupRoot, id),
   });
   const notes: string[] = [];
-  const side = async (ids: number[], label: string): Promise<ActivitySample[] | null> => {
+  const side = async (ids: StravaId[], label: string): Promise<ActivitySample[] | null> => {
     if (ids.length === 0) return null;
     for (const id of ids) {
       if (requireActivity(db, id).originalStatus !== "present") {
@@ -94,7 +95,7 @@ export async function groupTracks(
     }
   } else if (app !== null && fitbit !== null) {
     try {
-      const sport = requireActivity(db, group.appIds[0] as number).sportType;
+      const sport = requireActivity(db, group.appIds[0] as StravaId).sportType;
       const built = buildMerge({
         app,
         fitbit,

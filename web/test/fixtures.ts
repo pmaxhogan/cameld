@@ -104,8 +104,8 @@ export function group(over: Partial<GroupSummary> = {}): GroupSummary {
     id: "g-1",
     status: "review",
     path: "a",
-    appIds: [101],
-    fitbitIds: [202],
+    appIds: ["9100000000000000101"],
+    fitbitIds: ["9100000000000000202"],
     startMs: 1_000_000,
     sportType: "Run",
     name: "Morning Run",
@@ -162,11 +162,11 @@ export function tracks(over: Partial<GroupTracks> = {}): GroupTracks {
 
 export function groupDetail(over: Partial<GroupDetail> = {}): GroupDetail {
   return {
-    group: group({ status: "done", mergedActivityId: 303 }),
+    group: group({ status: "done", mergedActivityId: "9100000000000000303" }),
     match: MATCH,
     members: [
       {
-        id: 101,
+        id: "9100000000000000101",
         name: "Morning Run",
         sportType: "Run",
         source: "app",

@@ -1,5 +1,6 @@
 import type { MatchSettings } from "./match/settings.ts";
 import type { MergeSettings } from "./merge/merger.ts";
+import type { StravaId } from "./strava-id.ts";
 
 /**
  * Typed contract between the server's /api routes and the web UI. Types and
@@ -154,14 +155,14 @@ export interface GroupSummary {
   id: string;
   status: string;
   path: string | null;
-  appIds: number[];
-  fitbitIds: number[];
+  appIds: StravaId[];
+  fitbitIds: StravaId[];
   startMs: number;
   sportType: string | null;
   name: string | null;
   parkedReason: string | null;
-  mergedActivityId: number | null;
-  deletedIds: number[];
+  mergedActivityId: StravaId | null;
+  deletedIds: StravaId[];
   hiddenAt: number | null;
   trial: boolean;
   photosFlagged: boolean;
@@ -185,7 +186,7 @@ export interface GroupEventInfo {
 export interface WriteInfo {
   id: number;
   kind: string;
-  targetId: number | null;
+  targetId: StravaId | null;
   /** The upload's external_id (uploads have no target activity yet). */
   externalId: string | null;
   status: string;
@@ -195,7 +196,7 @@ export interface WriteInfo {
 }
 
 export interface MemberInfo {
-  id: number;
+  id: StravaId;
   name: string | null;
   sportType: string | null;
   source: string;
@@ -204,7 +205,7 @@ export interface MemberInfo {
   endMs: number;
   originalStatus: string;
   goneAt: number | null;
-  restoredAs: number | null;
+  restoredAs: StravaId | null;
 }
 
 /** GET /api/groups/:id */
@@ -256,8 +257,8 @@ export interface RestoreRequest {
 export interface RestoreResult {
   groupId: string;
   status: string;
-  restored: { id: number; outcome: string; newId: number | null; flags: string[] }[];
-  unhidden: number[];
+  restored: { id: StravaId; outcome: string; newId: StravaId | null; flags: string[] }[];
+  unhidden: StravaId[];
   flags: string[];
 }
 

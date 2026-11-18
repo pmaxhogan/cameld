@@ -1,3 +1,4 @@
+import type { StravaId } from "@cameld/shared";
 import type { DatabaseSync } from "node:sqlite";
 import { appendEvent, patchGroup, requireGroup, withTransaction } from "./repo.ts";
 
@@ -22,7 +23,7 @@ export function approveReview(
   const group = requireGroup(db, groupId);
   if (group.status !== "review") throw new ReviewError(`group ${groupId} is not in review`);
   // Three sources (or none) have no app/wrist roles: the owner can only reject.
-  if (((group.match as { appIds?: number[] } | null)?.appIds ?? []).length === 0) {
+  if (((group.match as { appIds?: StravaId[] } | null)?.appIds ?? []).length === 0) {
     throw new ReviewError(`group ${groupId} has no two-sided structure to merge`);
   }
   withTransaction(db, () => {
